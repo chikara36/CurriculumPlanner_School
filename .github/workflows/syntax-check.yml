@@ -1,0 +1,21 @@
+name: Syntax Check
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check JavaScript module syntax
+        shell: bash
+        run: |
+          set -e
+          for f in *.js; do
+            echo "Checking $f"
+            cp "$f" /tmp/check.mjs
+            node --check /tmp/check.mjs
+          done
