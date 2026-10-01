@@ -1,8 +1,7 @@
-// v1.0.1 startup hotfix
-// app.js v1.0.0 contains one duplicated top-level handleChange declaration.
-// ES modules reject duplicate top-level function declarations, so patch the source
-// before evaluating it. This keeps the deployed app usable while preserving the
-// original source for traceability.
+// v1.0.2 startup hotfix
+// Patch two syntax issues in the uploaded v1.0.0 app.js before evaluating it:
+// 1) duplicated top-level handleChange declaration
+// 2) an extra closing brace at the end of renderAbsenceResults
 (async()=>{
   try{
     const appUrl=new URL('./app.js',location.href);
@@ -12,6 +11,13 @@
 
     const legacy="function handleChange(e){const path=e.target.dataset.bind;if(path&&e.target.dataset.rerender!==undefined){state.updatedAt=new Date().toISOString();scheduleSave();render();if(['resources','timetable','days','hours'].includes(state.ui.page))refreshMetrics()}}\n";
     if(src.includes(legacy)) src=src.replace(legacy,'');
+
+    // Uploaded app.js has `return card('変更案', ... )}` followed by another `}`.
+    // Remove only the extra brace attached to that return statement.
+    src=src.replace(
+      /return card\('変更案',([\s\S]*?)`\)\}\n\}/,
+      "return card('変更案',$1`);\n}"
+    );
 
     // Blob modules have no repository-relative base URL, so convert static imports
     // to absolute URLs before evaluating the patched module.
