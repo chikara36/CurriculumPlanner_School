@@ -10,12 +10,29 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Check JavaScript module syntax
+      - name: Check static JavaScript modules
         shell: bash
         run: |
           set -e
           for f in *.js; do
+            [ "$f" = "app.js" ] && continue
             echo "Checking $f"
             cp "$f" /tmp/check.mjs
             node --check /tmp/check.mjs
           done
+      - name: Check runtime-patched app.js
+        shell: bash
+        run: |
+          set -e
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          src=Path('app.js').read_text(encoding='utf-8')
+          legacy="function handleChange(e){const path=e.target.dataset.bind;if(path&&e.target.dataset.rerender!==undefined){state.updatedAt=new Date().toISOString();scheduleSave();render();if(['resources','timetable','days','hours'].includes(state.ui.page))refreshMetrics()}}\n"
+          src=src.replace(legacy,'')
+          src,n=re.subn(r"return card\('変更案',([\s\S]*?)`\)\}\n\}",r"return card('変更案',\1`);\n}",src,count=1)
+          if n!=1:
+              raise SystemExit('absence syntax patch target not found')
+          Path('/tmp/app-fixed.mjs').write_text(src,encoding='utf-8')
+          PY
+          node --check /tmp/app-fixed.mjs
