@@ -1,7 +1,6 @@
-// v1.0.2 startup hotfix
-// Patch two syntax issues in the uploaded v1.0.0 app.js before evaluating it:
-// 1) duplicated top-level handleChange declaration
-// 2) an extra closing brace at the end of renderAbsenceResults
+// v1.0.3 startup repair
+// The original uploaded app.js contains two source-level issues. Until app.js is
+// rewritten directly, repair those exact regions deterministically before import.
 (async()=>{
   try{
     const appUrl=new URL('./app.js',location.href);
@@ -9,18 +8,24 @@
     if(!res.ok)throw new Error(`app.js の取得に失敗しました (${res.status})`);
     let src=await res.text();
 
+    // 1) Remove the first compact handleChange declaration. A fuller declaration
+    // later in app.js is the one we keep.
     const legacy="function handleChange(e){const path=e.target.dataset.bind;if(path&&e.target.dataset.rerender!==undefined){state.updatedAt=new Date().toISOString();scheduleSave();render();if(['resources','timetable','days','hours'].includes(state.ui.page))refreshMetrics()}}\n";
     if(src.includes(legacy)) src=src.replace(legacy,'');
 
-    // Uploaded app.js has `return card('変更案', ... )}` followed by another `}`.
-    // Remove only the extra brace attached to that return statement.
-    src=src.replace(
-      /return card\('変更案',([\s\S]*?)`\)\}\n\}/,
-      "return card('変更案',$1`);\n}"
-    );
+    // 2) Fix renderAbsenceResults. The uploaded source ends its return statement
+    // with `)}` and then closes the function again on the next line. Work only
+    // inside that function, replacing its final `)}` with `);`.
+    const fnStart=src.indexOf('function renderAbsenceResults(cache){');
+    const fnEnd=src.indexOf('\n\nfunction renderChecks(){',fnStart);
+    if(fnStart<0||fnEnd<0)throw new Error('renderAbsenceResults の修正対象を特定できませんでした');
+    let block=src.slice(fnStart,fnEnd);
+    const bad=block.lastIndexOf(')}');
+    if(bad<0)throw new Error('renderAbsenceResults の不正な末尾を特定できませんでした');
+    block=block.slice(0,bad)+');'+block.slice(bad+2);
+    src=src.slice(0,fnStart)+block+src.slice(fnEnd);
 
-    // Blob modules have no repository-relative base URL, so convert static imports
-    // to absolute URLs before evaluating the patched module.
+    // Blob modules have no repository-relative base URL, so convert imports.
     src=src.replace(/from\s+(['"])\.\/([^'"]+)\1/g,(_,q,path)=>`from ${JSON.stringify(new URL('./'+path,location.href).href)}`);
 
     const blobUrl=URL.createObjectURL(new Blob([src],{type:'text/javascript'}));
