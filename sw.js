@@ -1,4 +1,4 @@
-const CACHE='curriculum-planner-school-v1.2.0';
+const CACHE='curriculum-planner-school-v1.3.0';
 const CORE=[
   './','./index.html','./styles.css','./app.js','./model.js','./storage.js','./calendar.js','./drive.js','./reports.js','./solver-client.js','./solver.worker.js','./manifest.webmanifest','./icons/icon-192.png','./icons/icon-512.png'
 ];
