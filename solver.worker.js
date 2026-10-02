@@ -40,6 +40,7 @@ function groupLessons(m,lessonId){
   if(!l.syncGroup)return [l];return m.lessons.filter(x=>x.syncGroup&&x.syncGroup===l.syncGroup);
 }
 function taskKey(l){return l.syncGroup?`g:${l.syncGroup}`:`l:${l.id}`}
+function lessonBlockSize(l){return Math.max(1,Math.min(3,Number(l?.blockSize||1)))}
 function tasks(m,placements){
   const counts=new Map();for(const p of placements)counts.set(p.lessonId,(counts.get(p.lessonId)||0)+1);
   const byKey=new Map();for(const l of m.lessons){const k=taskKey(l);if(!byKey.has(k))byKey.set(k,[]);byKey.get(k).push(l)}
@@ -47,11 +48,12 @@ function tasks(m,placements){
   for(const [key,lessons] of byKey){
     const required=Math.max(...lessons.map(l=>Number(l.sessionsCycle||0)));
     const placed=Math.min(...lessons.map(l=>counts.get(l.id)||0));
-    for(let i=placed;i<required;i++)out.push({key,lessonIds:lessons.map(l=>l.id),instance:i});
+    const configured=Math.max(...lessons.map(lessonBlockSize));
+    for(let i=placed;i<required;){const span=Math.min(configured,required-i);out.push({key,lessonIds:lessons.map(l=>l.id),instance:i,span});i+=span}
   }
   return out;
 }
-function allSlots(m){const out=[];for(let w=0;w<m.cycleWeeks;w++)for(let d=0;d<5;d++)for(let p=0;p<m.periodsCount;p++)out.push({week:w,day:d,period:p});return out}
+function allSlots(m,span=1){const out=[];for(let w=0;w<m.cycleWeeks;w++)for(let d=0;d<5;d++)for(let p=0;p<=m.periodsCount-Math.max(1,span);p++)out.push({week:w,day:d,period:p});return out}
 
 function hardForTask(m,mp,lessonIds,slot,placements,ignoreIds=[],absence=null,{prefix=true,candidatePlacements=[]}={}){
   const ignore=new Set(ignoreIds);const conflicts=[];const lessons=lessonIds.map(id=>mp.les.get(id)).filter(Boolean);
@@ -95,6 +97,18 @@ function hardForTask(m,mp,lessonIds,slot,placements,ignoreIds=[],absence=null,{p
   return conflicts;
 }
 
+function hardForBlockTask(m,mp,lessonIds,slot,placements,ignoreIds=[],absence=null,opts={},span=1){
+  span=Math.max(1,Number(span||1));if(slot.period<0||slot.period+span>m.periodsCount)return [{type:'block-end',text:`${span}コマ連続ではこの開始時限に配置できません`}];
+  let working=placements.slice();
+  for(let off=0;off<span;off++){
+    const s={week:slot.week,day:slot.day,period:slot.period+off};
+    const cand=lessonIds.map((lessonId,i)=>({id:`cand_${off}_${i}`,lessonId,week:s.week,day:s.day,period:s.period,locked:false}));
+    const conf=hardForTask(m,mp,lessonIds,s,working,ignoreIds,absence,{...opts,candidatePlacements:cand});
+    if(conf.length)return conf;working=working.concat(cand);
+  }
+  return [];
+}
+
 function softForTask(m,mp,lessonIds,slot,placements,ignoreIds=[],absence=null){
   const ignore=new Set(ignoreIds);let cost=0;const reasons=[];const lessons=lessonIds.map(id=>mp.les.get(id)).filter(Boolean);cost+=slot.period*0.03;
   for(const l of lessons){
@@ -118,9 +132,14 @@ function softForTask(m,mp,lessonIds,slot,placements,ignoreIds=[],absence=null){
   const first=lessons[0];if(first){const same=placements.filter(p=>!ignore.has(p.id)&&placementLesson(mp,p)?.subject===first.subject&&placementLesson(mp,p)?.classIds?.some(c=>(first.classIds||[]).includes(c)));const wd=same.filter(p=>p.week===slot.week&&p.day===slot.day).length;cost+=wd*1.2}
   return {cost,reasons:[...new Set(reasons)]};
 }
-function makePlacements(lessonIds,slot){return lessonIds.map(lessonId=>({id:uid(),lessonId,week:slot.week,day:slot.day,period:slot.period,locked:false}))}
+function softForBlockTask(m,mp,lessonIds,slot,placements,ignoreIds=[],absence=null,span=1){
+  let cost=0,reasons=[],working=placements.slice();span=Math.max(1,Number(span||1));
+  for(let off=0;off<span;off++){const s={week:slot.week,day:slot.day,period:slot.period+off};const r=softForTask(m,mp,lessonIds,s,working,ignoreIds,absence);cost+=r.cost;reasons.push(...r.reasons);working.push(...lessonIds.map((lessonId,i)=>({id:`soft_${off}_${i}`,lessonId,week:s.week,day:s.day,period:s.period,locked:false})))}
+  return {cost,reasons:[...new Set(reasons)]};
+}
+function makePlacements(lessonIds,slot,span=1){const blockId=uid();const out=[];for(let off=0;off<Math.max(1,Number(span||1));off++)for(const lessonId of lessonIds)out.push({id:uid(),blockId,lessonId,week:slot.week,day:slot.day,period:slot.period+off,locked:false});return out}
 function difficulty(m,mp,task,placements){
-  let resource=0,scarcity=0;for(const id of task.lessonIds){const l=mp.les.get(id);resource+=(l.classIds?.length||0)*3+(l.teacherIds?.filter(Boolean).length||0)*4+(l.facilityId&&l.facilityId!=='normal'?6:0)+(l.syncGroup?10:0);for(const tid of l.teacherIds||[]){const t=mp.teach.get(tid);scarcity+=(t?.unavailable||[]).length+(t?.leaves||[]).length*3}const f=mp.fac.get(l.facilityId);if(f&&Number(f.capacity||1)===1&&l.facilityId!=='normal')scarcity+=5}
+  let resource=0,scarcity=0;for(const id of task.lessonIds){const l=mp.les.get(id);resource+=(l.classIds?.length||0)*3+(l.teacherIds?.filter(Boolean).length||0)*4+(l.facilityId&&l.facilityId!=='normal'?6:0)+(l.syncGroup?10:0)+(lessonBlockSize(l)>1?12:0);for(const tid of l.teacherIds||[]){const t=mp.teach.get(tid);scarcity+=(t?.unavailable||[]).length+(t?.leaves||[]).length*3}const f=mp.fac.get(l.facilityId);if(f&&Number(f.capacity||1)===1&&l.facilityId!=='normal')scarcity+=5}
   return {resource,scarcity,rank:-(resource+scarcity)};
 }
 function scheduleMetrics(m,placements,absence=null){
@@ -137,6 +156,7 @@ function scheduleMetrics(m,placements,absence=null){
   const score=Math.max(0,Math.round(100-hard.length*25-unplaced*4-Math.min(30,soft/18)));return {hard,soft,unplaced,placed:placements.length,locked:placements.filter(p=>p.locked).length,score}
 }
 function tryOneRepair(m,mp,placements,task){
+  if(Number(task.span||1)>1)return null;
   const slots=allSlots(m);
   for(const slot of slots){
     const conf=hardForTask(m,mp,task.lessonIds,slot,placements,[],null,{prefix:false});const blockerIds=[...new Set(conf.map(x=>x.placementId).filter(Boolean))];if(conf.some(x=>!x.placementId)||blockerIds.length!==1)continue;
@@ -155,8 +175,8 @@ function solve(m,mode='rebuild'){
     let ps=clone(base),pending=tasks(m,ps);pending=pending.map(t=>({...t,d:difficulty(m,mp,t,ps)})).sort((x,y)=>x.d.rank-y.d.rank+(Math.random()-.5)*20);
     const stuck=[];
     for(const task of pending){
-      const cands=[];for(const slot of allSlots(m)){const hard=hardForTask(m,mp,task.lessonIds,slot,ps,[],null,{prefix:false});if(hard.length)continue;const soft=softForTask(m,mp,task.lessonIds,slot,ps);cands.push({...slot,cost:soft.cost+Math.random()*1.4})}
-      cands.sort((x,y)=>x.cost-y.cost);if(cands.length){const pool=cands.slice(0,Math.min(3,cands.length));const s=pool[Math.floor(Math.random()*pool.length)];ps.push(...makePlacements(task.lessonIds,s))}else stuck.push(task)
+      const cands=[];for(const slot of allSlots(m,task.span)){const hard=hardForBlockTask(m,mp,task.lessonIds,slot,ps,[],null,{prefix:false},task.span);if(hard.length)continue;const soft=softForBlockTask(m,mp,task.lessonIds,slot,ps,[],null,task.span);cands.push({...slot,cost:soft.cost+Math.random()*1.4})}
+      cands.sort((x,y)=>x.cost-y.cost);if(cands.length){const pool=cands.slice(0,Math.min(3,cands.length));const s=pool[Math.floor(Math.random()*pool.length)];ps.push(...makePlacements(task.lessonIds,s,task.span))}else stuck.push(task)
     }
     for(const task of stuck){const repaired=tryOneRepair(m,mp,ps,task);if(repaired)ps=repaired}
     const met=scheduleMetrics(m,ps);const rank=met.hard.length*100000+met.unplaced*2000+met.soft;if(!best||rank<best.rank)best={rank,placements:ps,metrics:met};if(met.hard.length===0&&met.unplaced===0&&met.soft<15)break;
@@ -166,13 +186,15 @@ function solve(m,mode='rebuild'){
 
 function placeLesson(m,lessonId,target){
   const mp=maps(m),lessons=groupLessons(m,lessonId);if(!lessons.length)return {ok:false,conflicts:[{text:'授業が見つかりません'}]};
-  const ids=lessons.map(x=>x.id);for(const l of lessons){const placed=m.placements.filter(p=>p.lessonId===l.id).length;if(placed>=Number(l.sessionsCycle||0))return {ok:false,conflicts:[{text:`${l.subject} は必要コマ数を配置済みです`}]} }
-  const conf=hardForTask(m,mp,ids,target,m.placements);if(conf.length)return {ok:false,conflicts:conf};const ps=[...m.placements,...makePlacements(ids,target)];return {ok:true,placements:ps,metrics:scheduleMetrics(m,ps)};
+  const ids=lessons.map(x=>x.id),left=[];for(const l of lessons){const placed=m.placements.filter(p=>p.lessonId===l.id).length,remain=Number(l.sessionsCycle||0)-placed;if(remain<=0)return {ok:false,conflicts:[{text:`${l.subject} は必要コマ数を配置済みです`}]};left.push(remain)}
+  const span=Math.min(Math.max(...lessons.map(lessonBlockSize)),Math.min(...left));const conf=hardForBlockTask(m,mp,ids,target,m.placements,[],null,{prefix:true},span);if(conf.length)return {ok:false,conflicts:conf};const ps=[...m.placements,...makePlacements(ids,target,span)];return {ok:true,placements:ps,metrics:scheduleMetrics(m,ps)};
 }
 
 function movePlacement(m,placementId,target){
-  const mp=maps(m),p=m.placements.find(x=>x.id===placementId);if(!p)return {ok:false,conflicts:[{text:'配置が見つかりません'}]};const l=mp.les.get(p.lessonId);const related=l?.syncGroup?m.placements.filter(x=>{const q=mp.les.get(x.lessonId);return q?.syncGroup===l.syncGroup&&x.week===p.week&&x.day===p.day&&x.period===p.period}):[p];if(related.some(x=>x.locked))return {ok:false,conflicts:[{text:'固定された授業は移動できません'}]};
-  const ids=related.map(x=>x.id),without=m.placements.filter(x=>!ids.includes(x.id)),lessonIds=related.map(x=>x.lessonId);const conf=hardForTask(m,mp,lessonIds,target,without);if(conf.length)return {ok:false,conflicts:conf};const moved=related.map(x=>({...x,week:target.week,day:target.day,period:target.period}));return {ok:true,placements:[...without,...moved],metrics:scheduleMetrics(m,[...without,...moved])}
+  const mp=maps(m),p=m.placements.find(x=>x.id===placementId);if(!p)return {ok:false,conflicts:[{text:'配置が見つかりません'}]};const l=mp.les.get(p.lessonId);
+  const related=p.blockId?m.placements.filter(x=>x.blockId===p.blockId):(l?.syncGroup?m.placements.filter(x=>{const q=mp.les.get(x.lessonId);return q?.syncGroup===l.syncGroup&&x.week===p.week&&x.day===p.day&&x.period===p.period}):[p]);if(related.some(x=>x.locked))return {ok:false,conflicts:[{text:'固定された授業は移動できません'}]};
+  const ids=related.map(x=>x.id),without=m.placements.filter(x=>!ids.includes(x.id)),basePeriod=Math.min(...related.map(x=>x.period)),lastPeriod=Math.max(...related.map(x=>x.period)),span=lastPeriod-basePeriod+1,dragOffset=p.period-basePeriod,start={week:target.week,day:target.day,period:target.period-dragOffset};if(start.period<0)return {ok:false,conflicts:[{text:'連続授業の開始時限が範囲外です'}]};
+  const lessonIds=[...new Set(related.filter(x=>x.period===basePeriod).map(x=>x.lessonId))];const conf=hardForBlockTask(m,mp,lessonIds,start,without,[],null,{prefix:false},span);if(conf.length)return {ok:false,conflicts:conf};const moved=related.map(x=>({...x,week:start.week,day:start.day,period:start.period+(x.period-basePeriod)}));return {ok:true,placements:[...without,...moved],metrics:scheduleMetrics(m,[...without,...moved])}
 }
 
 function substituteCandidate(m,mp,placements,p,absentId,absence){
