@@ -1,4 +1,4 @@
-import {APP_VERSION,SCHEMA_VERSION,defaultState,migrateState,deepClone,uid,DAYS,classById,teacherById,facilityById,lessonById,cycleSessionsForLesson,validateState,normalizeResources} from './model.js';
+import {APP_VERSION,SCHEMA_VERSION,defaultState,migrateState,deepClone,uid,DAYS,classById,teacherById,facilityById,lessonById,cycleSessionsForLesson,validateState,normalizeResources,applySchoolTypeDefaults,standardUnitMinutesForSchool,implementationPeriodsForStandardUnits,implementationExactPeriods} from './model.js';
 import {loadState,saveState,downloadText,readFile} from './storage.js';
 import {calendarStats,weeklyTargetForGrade,dailyPattern,gradePatterns,monthMatrix,typeLabel,isoDate} from './calendar.js';
 import {solveSchedule,scheduleMetrics,movePlacement,placeLesson,absenceProposals,buildSolverModel} from './solver-client.js';
@@ -41,7 +41,6 @@ function bindGlobal(){
   document.body.addEventListener('dragstart',handleDragStart);document.body.addEventListener('dragover',e=>{if(e.target.closest('[data-drop]')){e.preventDefault();e.target.closest('[data-drop]').classList.add('drop-target')}});document.body.addEventListener('dragleave',e=>e.target.closest('[data-drop]')?.classList.remove('drop-target'));document.body.addEventListener('drop',handleDrop);
 }
 function handleBind(e){const path=e.target.dataset.bind;if(!path)return;let v=e.target.type==='checkbox'?e.target.checked:e.target.value;if(e.target.dataset.number!==undefined)v=n(v);if(e.target.dataset.boolean!==undefined)v=String(v)==='true';setByPath(state,path,v);if(path==='goals.featureTagsText')state.goals.featureTags=String(v).split(/[、,]/).map(x=>x.trim()).filter(Boolean);const sm=path.match(/^resources\.teachers\.(\d+)\.subjectsText$/);if(sm)state.resources.teachers[Number(sm[1])].subjects=String(v).split(/[、,]/).map(x=>x.trim()).filter(Boolean);if(path==='timetable.cycleWeeks'){state.instruction.cycleWeeks=n(v,1);state.timetable.view.week=Math.min(state.timetable.view.week,n(v,1)-1)}state.updatedAt=new Date().toISOString();scheduleSave();if(e.target.dataset.live==='top')updateTop()}
-function handleChange(e){const path=e.target.dataset.bind;if(path&&e.target.dataset.rerender!==undefined){state.updatedAt=new Date().toISOString();scheduleSave();render();if(['resources','timetable','days','hours'].includes(state.ui.page))refreshMetrics()}}
 function scheduleSave(){clearTimeout(saveTimer);$('#saveChip').textContent='保存中…';saveTimer=setTimeout(async()=>{try{await saveState(state);$('#saveChip').textContent='端末に保存済み'}catch(e){$('#saveChip').textContent='保存失敗';toast(e.message,'err')}},450)}
 function render(){renderNav();updateTop();const c=$('#content');const fn={basic:renderBasic,goals:renderGoals,calendar:renderCalendar,days:renderDays,hours:renderHours,integrated:renderIntegrated,periods:renderPeriods,resources:renderResources,timetable:renderTimetable,operations:renderOperations,checks:renderChecks,reports:renderReports}[state.ui.page]||renderBasic;c.innerHTML=fn();afterRender()}
 function renderNav(){$('#nav').innerHTML=`<div class="nav-title">学校で作成</div>`+NAV.map(([id,num,label])=>`<div class="nav-item ${state.ui.page===id?'active':''}" data-nav="${id}"><span class="num">${num}</span><span class="label">${label}</span><span class="state ${navState(id)}">●</span></div>`).join('')}
@@ -52,17 +51,18 @@ function pushUndo(){state.timetable.undo=state.timetable.undo||[];state.timetabl
 function applyPlacements(ps){pushUndo();state.timetable.placements=ps;state.updatedAt=new Date().toISOString();scheduleSave();refreshMetrics();render()}
 
 function renderBasic(){
+  const stdMin=standardUnitMinutesForSchool(state.school.type);const actualMin=Number(state.school.lessonMinutes||stdMin);const sampleStd=state.school.type==='junior_high'?1015:(state.hourPlans[0]?.annualTarget||0);const sampleImpl=implementationPeriodsForStandardUnits(state,sampleStd);const exactImpl=implementationExactPeriods(state,sampleStd);
   return pageHead('01 基本情報','学校・年度・校種など、教育課程編成の基礎情報を設定します。',`<span class="chip info">スキーマ v${SCHEMA_VERSION}</span>`)+
   `<div class="grid cols2">${card('学校情報',`<div class="form-grid">
     ${field('学校名',input('school.name',state.school.name,'text','data-live="top"'),'span8')}
     ${field('学校コード',input('school.code',state.school.code),'span4')}
-    ${field('校種',select('school.type',state.school.type,[['elementary','小学校'],['junior_high','中学校'],['compulsory','義務教育学校'],['high','高等学校'],['other','その他']]),'span4')}
+    ${field('校種',select('school.type',state.school.type,[['elementary','小学校'],['junior_high','中学校']],'data-rerender'),'span4','校種を変更すると、教科・標準時数・時間割基礎データを校種別に切り替えます。')}
     ${field('校長名',input('school.principal',state.school.principal),'span4')}
     ${field('年度',input('school.fiscalYear',state.school.fiscalYear,'number','data-number data-rerender'),'span4','年度変更後は年間カレンダーの期間も確認してください。')}
-    ${field('授業1コマ',input('school.lessonMinutes',state.school.lessonMinutes,'number','data-number'),'span3')}
+    ${field('実施1コマ（分）',input('school.lessonMinutes',state.school.lessonMinutes,'number','data-number data-rerender'),'span3',`標準1単位時間：${stdMin}分`)}
     ${field('学期制',select('school.termSystem',state.school.termSystem,[[2,'2学期制'],[3,'3学期制']],'data-number'),'span3')}
     ${field('備考',`<textarea data-bind="school.notes">${esc(state.school.notes)}</textarea>`,'span12')}
-  </div>`) }
+  </div><div class="notice info" style="margin-top:10px"><strong>${state.school.type==='elementary'?'小学校':'中学校'}：</strong>標準1単位時間は${stdMin}分です。実施1コマを${actualMin}分にすると、標準時数は授業分数で自動換算します。${actualMin!==stdMin?` 例：標準${sampleStd}単位 → ${sampleStd}×${stdMin}÷${actualMin}=${exactImpl.toFixed(2)} → <strong>${sampleImpl}コマ以上</strong>必要。`:''}</div>`) }
   ${card('この学校版の保存方式',`<div class="notice ok">入力内容はChromebook/PCのIndexedDBへ自動保存します。Google Drive同期は任意で、ネットワークがない状態でも教育課程・時間割の編集を続けられます。</div>
   <div class="kpi-line"><span>最終更新</span><strong>${fmtTime(state.updatedAt)}</strong></div>
   <div class="kpi-line"><span>Drive最終同期</span><strong>${fmtTime(state.drive.lastSyncAt)}</strong></div>
@@ -90,18 +90,18 @@ function renderCalendar(){
 function renderMiniMonth(y,m,stats){const mat=monthMatrix(y,m);return `<div class="month-card"><h4>${y}年${m+1}月</h4><div class="month-body"><div class="month-kpi"><span>授業日</span><strong>${stats.byMonth[`${y}-${String(m+1).padStart(2,'0')}`]||0}日</strong></div><div class="mini-cal">${['月','火','水','木','金','土','日'].map(x=>`<div class="dow">${x}</div>`).join('')}${mat.map(({date,inMonth})=>{const k=isoDate(date),x=stats.byDate[k],ev=(state.calendar.events||[]).some(e=>e.date===k);let cls='day';if(!inMonth)cls+=' out';else if(x?.exception&&['saturday_instruction','special_instruction','national_override_on'].includes(x.exception.type))cls+=' instruction special';else if(x?.exception&&!x.instruction)cls+=' schooloff';else if(x?.holiday&&!x.instruction)cls+=' holiday';else if(x?.instruction)cls+=' instruction';else if(date.getDay()===0||date.getDay()===6)cls+=' weekend';if(ev)cls+=' event';return `<div class="${cls}" title="${attr(x?.holiday||x?.exception?.label||x?.reason||'')}">${date.getDate()}</div>`}).join('')}</div></div></div>`}
 
 function renderDays(){
-  const stats=calendarStats(state),patterns=gradePatterns(state,stats);
+  const stats=calendarStats(state),patterns=gradePatterns(state,stats),stdMin=standardUnitMinutesForSchool(state.school.type),actualMin=Number(state.school.lessonMinutes||stdMin);
   return pageHead('04 授業日数・週コマ数','年間授業日数から授業週数を求め、年間計画時数を割って基準週コマ数を自動算出します。')+
-  `<div class="grid cols4">${metric('年間授業日数',stats.instructionDays,'日','学期範囲・祝日・学校例外を反映')}${metric('授業週換算',stats.weeks.toFixed(1),'週','授業日数 ÷ 5')}${metric('時間割サイクル',state.timetable.cycleWeeks,'週','1〜3週パターン')}${metric('最大時限',state.instruction.maxPeriods,'限','曜日ごとの空きは日末側')}</div><div style="height:12px"></div>
+  `<div class="grid cols4">${metric('年間授業日数',stats.instructionDays,'日','学期範囲・祝日・学校例外を反映')}${metric('授業週換算',stats.weeks.toFixed(1),'週','授業日数 ÷ 5')}${metric('標準1単位時間',stdMin,'分',state.school.type==='elementary'?'小学校基準':'中学校基準')}${metric('実施1コマ',actualMin,'分',actualMin===stdMin?'標準どおり':'時数を分数換算')}</div><div style="height:12px"></div><div class="notice ${actualMin===stdMin?'ok':'warn'}">標準授業時数は「単位時間」で管理します。実施時間が標準と異なる場合、必要コマ数 = 標準時数 × ${stdMin} ÷ ${actualMin} を切り上げて時間割へ反映します。</div><div style="height:12px"></div>
   ${card('週コマ数の設定',`<div class="form-grid">${field('計算方式',select('instruction.manualWeeklyTarget',state.instruction.manualWeeklyTarget?'true':'false',[['false','年間時数から自動計算'],['true','学校で週コマ数を指定']],'data-boolean data-rerender'),'span4')}${field('手動週コマ数',input('instruction.weeklyTargetOverride',state.instruction.weeklyTargetOverride??'','number','data-number data-rerender'),'span3')}${field('時間割サイクル',select('timetable.cycleWeeks',state.timetable.cycleWeeks,[[1,'1週'],[2,'2週'],[3,'3週']],'data-number data-rerender'),'span3')}${field('1日最大時限',select('instruction.maxPeriods',state.instruction.maxPeriods,[[5,'5限'],[6,'6限'],[7,'7限']],'data-number data-rerender'),'span2')}</div>`)}
   <div style="height:12px"></div>
-  ${card('学年別の自動計算',`<div class="table-wrap"><table class="table"><thead><tr><th>学年</th><th>年間計画時数</th><th>週平均</th><th>基準週</th><th>サイクル別</th><th>曜日配当</th></tr></thead><tbody>${state.hourPlans.map(p=>{const w=weeklyTargetForGrade(state,p.grade,stats);return `<tr><td>${p.grade}年</td><td class="num">${p.annualTarget}</td><td class="num">${w.avg.toFixed(2)}</td><td class="num"><strong>${w.base}</strong></td><td>${w.targets.map((x,i)=>`${i+1}週:${x}`).join(' / ')}</td><td>${(patterns[p.grade]?.[0]||[]).map((x,i)=>`${DAYS[i]}${x}`).join('・')}</td></tr>`}).join('')}</tbody></table></div><div class="notice info" style="margin-top:10px">生徒の時間割は中抜けを作らず、例えば5コマの日は1〜5限に授業を入れ、6限を空きにします。</div>`)} `;
+  ${card('学年別の自動計算',`<div class="table-wrap"><table class="table"><thead><tr><th>学年</th><th>標準年間時数</th><th>実施必要コマ</th><th>週平均</th><th>基準週</th><th>サイクル別</th><th>曜日配当</th></tr></thead><tbody>${state.hourPlans.map(p=>{const w=weeklyTargetForGrade(state,p.grade,stats);return `<tr><td>${p.grade}年</td><td class="num">${w.standardAnnual}</td><td class="num"><strong>${w.annual}</strong></td><td class="num">${w.avg.toFixed(2)}</td><td class="num"><strong>${w.base}</strong></td><td>${w.targets.map((x,i)=>`${i+1}週:${x}`).join(' / ')}</td><td>${(patterns[p.grade]?.[0]||[]).map((x,i)=>`${DAYS[i]}${x}`).join('・')}</td></tr>`}).join('')}</tbody></table></div><div class="notice info" style="margin-top:10px">生徒の時間割は中抜けを作らず、例えば5コマの日は1〜5限に授業を入れ、6限を空きにします。</div>`)} `;
 }
 
 function renderHours(){
   const stats=calendarStats(state);
-  return pageHead('05 授業時数','学年別の年間計画時数を編集します。時間割の必要コマ数は、この年間時数と授業週数から算出します。')+
-  `<div class="grid">${state.hourPlans.map((p,pi)=>card(`${p.grade}年`, `<div class="inline" style="margin-bottom:9px"><span class="chip info">年間目標 ${p.annualTarget}コマ</span><span class="chip neutral">週平均 ${weeklyTargetForGrade(state,p.grade,stats).avg.toFixed(2)}</span></div><div class="table-wrap"><table class="table"><thead><tr><th>教科等</th><th>年間時数</th><th>調整</th><th>調整後</th></tr></thead><tbody>${p.subjects.map((s,si)=>`<tr><td>${esc(s.name)}</td><td>${input(`hourPlans.${pi}.subjects.${si}.hours`,s.hours,'number','data-number data-rerender')}</td><td>${input(`hourPlans.${pi}.subjects.${si}.adjustment`,s.adjustment||0,'number','data-number data-rerender')}</td><td class="num"><strong>${n(s.hours)+n(s.adjustment)}</strong></td></tr>`).join('')}<tr class="total"><td>合計</td><td class="num">${p.subjects.reduce((a,s)=>a+n(s.hours),0)}</td><td class="num">${p.subjects.reduce((a,s)=>a+n(s.adjustment),0)}</td><td class="num">${p.subjects.reduce((a,s)=>a+n(s.hours)+n(s.adjustment),0)}</td></tr></tbody></table></div><div class="form-grid" style="margin-top:8px">${field('年間計画時数（目標）',input(`hourPlans.${pi}.annualTarget`,p.annualTarget,'number','data-number data-rerender'),'span3')}</div>`)).join('')}</div>`;
+  return pageHead('05 授業時数','学年別の標準授業時数（小学校45分・中学校50分を1単位時間）を管理します。実施1コマの分数が異なる場合は必要コマ数へ自動換算します。')+
+  `<div class="grid">${state.hourPlans.map((p,pi)=>{const w=weeklyTargetForGrade(state,p.grade,stats);return card(`${p.grade}年`, `<div class="inline" style="margin-bottom:9px"><span class="chip info">標準年間 ${p.annualTarget}単位</span><span class="chip ${w.lessonMinutes===w.standardMinutes?'ok':'warn'}">実施 ${w.annual}コマ</span><span class="chip neutral">週平均 ${w.avg.toFixed(2)}</span></div><div class="table-wrap"><table class="table"><thead><tr><th>教科等</th><th>標準時数</th><th>調整</th><th>調整後標準時数</th><th>実施必要コマ</th></tr></thead><tbody>${p.subjects.map((s,si)=>{const adjusted=n(s.hours)+n(s.adjustment);return `<tr><td>${esc(s.name)}</td><td>${input(`hourPlans.${pi}.subjects.${si}.hours`,s.hours,'number','data-number data-rerender')}</td><td>${input(`hourPlans.${pi}.subjects.${si}.adjustment`,s.adjustment||0,'number','data-number data-rerender')}</td><td class="num"><strong>${adjusted}</strong></td><td class="num"><strong>${implementationPeriodsForStandardUnits(state,adjusted,p.grade)}</strong></td></tr>`}).join('')}<tr class="total"><td>合計</td><td class="num">${p.subjects.reduce((a,s)=>a+n(s.hours),0)}</td><td class="num">${p.subjects.reduce((a,s)=>a+n(s.adjustment),0)}</td><td class="num">${p.subjects.reduce((a,s)=>a+n(s.hours)+n(s.adjustment),0)}</td><td class="num">${implementationPeriodsForStandardUnits(state,p.subjects.reduce((a,s)=>a+n(s.hours)+n(s.adjustment),0),p.grade)}</td></tr></tbody></table></div><div class="form-grid" style="margin-top:8px">${field('年間標準時数（目標）',input(`hourPlans.${pi}.annualTarget`,p.annualTarget,'number','data-number data-rerender'),'span3',`標準1単位=${w.standardMinutes}分 / 実施1コマ=${w.lessonMinutes}分`)}</div>`)}).join('')}</div>`;
 }
 
 function renderIntegrated(){
@@ -173,7 +173,7 @@ function renderOperations(){
 }
 function renderAbsenceResults(cache){
   if(!cache.affected?.length)return card('欠勤影響','<div class="notice ok">指定した教員はこの曜日に授業がありません。</div>');
-  return card('変更案',`<div class="notice info">影響する授業：${cache.affected.length}件。案を採用すると「臨時時間割」として保存され、基本時間割はそのまま残ります。</div><div class="grid cols2" style="margin-top:10px">${cache.proposals.map((p,i)=>`<div class="card flat"><div class="inline"><h4>${esc(p.title)}</h4><span class="badge ${p.ok?'ok':'warn'} right">${p.ok?'成立':'要手動調整'}</span></div>${p.changes.map(c=>`<div class="constraint"><strong>${esc(c.type)}</strong><div class="meta">${esc(c.text)}</div></div>`).join('')}<div class="kpi-line"><span>HARD</span><strong>${p.metrics.hard.length}</strong></div><button class="btn ${p.ok?'green':'warn'}" data-action="applyAbsenceProposal" data-index="${i}" ${p.ok?'':'disabled'}>この案を臨時時間割に保存</button></div>`).join('')}</div>`)}
+  return card('変更案',`<div class="notice info">影響する授業：${cache.affected.length}件。案を採用すると「臨時時間割」として保存され、基本時間割はそのまま残ります。</div><div class="grid cols2" style="margin-top:10px">${cache.proposals.map((p,i)=>`<div class="card flat"><div class="inline"><h4>${esc(p.title)}</h4><span class="badge ${p.ok?'ok':'warn'} right">${p.ok?'成立':'要手動調整'}</span></div>${p.changes.map(c=>`<div class="constraint"><strong>${esc(c.type)}</strong><div class="meta">${esc(c.text)}</div></div>`).join('')}<div class="kpi-line"><span>HARD</span><strong>${p.metrics.hard.length}</strong></div><button class="btn ${p.ok?'green':'warn'}" data-action="applyAbsenceProposal" data-index="${i}" ${p.ok?'':'disabled'}>この案を臨時時間割に保存</button></div>`).join('')}</div>`);
 }
 
 function renderChecks(){
@@ -250,7 +250,16 @@ async function handleClick(e){
   }catch(err){console.error(err);toast(err.message||String(err),'err')}
 }
 function handleChange(e){
-  const path=e.target.dataset.bind;if(path&&e.target.dataset.rerender!==undefined){state.updatedAt=new Date().toISOString();scheduleSave();render();if(['resources','timetable','days','hours'].includes(state.ui.page))refreshMetrics()}
+  const path=e.target.dataset.bind;
+  if(path==='school.type'){
+    const next=e.target.value;
+    applySchoolTypeDefaults(state,next);
+    metricsCache=null;absenceCache=null;
+    scheduleSave();render();refreshMetrics();
+    toast(next==='elementary'?'小学校の教科・標準時数・45分基準へ切り替えました':'中学校の教科・標準時数・50分基準へ切り替えました','ok');
+    return;
+  }
+  if(path&&e.target.dataset.rerender!==undefined){state.updatedAt=new Date().toISOString();scheduleSave();render();if(['resources','timetable','days','hours','basic'].includes(state.ui.page))refreshMetrics()}
   const a=e.target.dataset.action;
   if(a==='scheduleViewId'){state.timetable.view.id=e.target.value;scheduleSave();render()}
   if(a==='reportType'){state.ui.reportType=e.target.value;scheduleSave();renderReportPreview()}
