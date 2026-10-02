@@ -1,5 +1,5 @@
-export const APP_VERSION='1.1.1';
-export const SCHEMA_VERSION=6;
+export const APP_VERSION='1.2.0';
+export const SCHEMA_VERSION=7;
 export const DAYS=['月','火','水','木','金'];
 
 export const DEFAULT_SUBJECTS_JHS=[
@@ -92,7 +92,7 @@ function defaultLessons(classes,teachers,hourPlans,type='junior_high'){
       if(type==='elementary'){
         if(['外国語','外国語活動'].includes(s.name))tid='tE';else if(s.name==='音楽')tid='tMu';else if(s.name==='体育')tid='tPE';else tid=`t_${c.id}`;
       }
-      out.push({id:`l_${c.id}_${s.id}`,name:s.name,subject:s.name,classIds:[c.id],teacherIds:[tid].filter(Boolean),facilityId:facility[s.name]||'normal',annualHours:s.hours,cycleSessionsOverride:null,type:'normal',syncGroup:'',allowTeacherTBD:false,allowFacilityTBD:false,unavailable:[],preferred:[]});
+      out.push({id:`l_${c.id}_${s.id}`,name:s.name,subject:s.name,classIds:[c.id],teacherIds:[tid].filter(Boolean),facilityId:facility[s.name]||'normal',annualHours:s.hours,cycleSessionsOverride:null,blockSize:1,type:'normal',syncGroup:'',allowTeacherTBD:false,allowFacilityTBD:false,unavailable:[],preferred:[]});
     }
   }
   return out;
@@ -128,11 +128,12 @@ export function migrateState(raw){
   const base=defaultState(),oldSchema=Number(raw.schemaVersion||0),st={...base,...raw};st.schemaVersion=SCHEMA_VERSION;st.appVersion=APP_VERSION;st.updatedAt=new Date().toISOString();st.school={...base.school,...(raw.school||raw.schoolInfo||{})};
   st.goals={...base.goals,...(raw.goals||{})};st.calendar={...base.calendar,...(raw.calendar||{})};st.calendar.terms=Array.isArray(st.calendar.terms)?st.calendar.terms:base.calendar.terms;st.calendar.exceptions=Array.isArray(st.calendar.exceptions)?st.calendar.exceptions:[];st.calendar.events=Array.isArray(st.calendar.events)?st.calendar.events:[];st.instruction={...base.instruction,...(raw.instruction||{})};
   st.hourPlans=Array.isArray(raw.hourPlans)?raw.hourPlans:base.hourPlans;st.adjusted={...base.adjusted,...(raw.adjusted||{})};st.integrated={...base.integrated,...(raw.integrated||{})};st.periods=Array.isArray(raw.periods)?raw.periods:base.periods;const oldLab=raw.scheduleLab;st.resources=raw.resources||base.resources;
-  st.lessons=Array.isArray(raw.lessons)?raw.lessons:(oldLab?.lessons?oldLab.lessons.map(l=>({id:l.id,name:l.subject||l.name,subject:l.subject||l.name,classIds:l.classIds||[],teacherIds:l.teacherIds||[],facilityId:l.roomId||'normal',annualHours:35,cycleSessionsOverride:l.sessions||null,type:l.type||'normal',syncGroup:'',allowTeacherTBD:false,allowFacilityTBD:false,unavailable:l.unavailable||[],preferred:l.preferred||[]})):base.lessons);
+  st.lessons=Array.isArray(raw.lessons)?raw.lessons:(oldLab?.lessons?oldLab.lessons.map(l=>({id:l.id,name:l.subject||l.name,subject:l.subject||l.name,classIds:l.classIds||[],teacherIds:l.teacherIds||[],facilityId:l.roomId||'normal',annualHours:35,cycleSessionsOverride:l.sessions||null,blockSize:1,type:l.type||'normal',syncGroup:'',allowTeacherTBD:false,allowFacilityTBD:false,unavailable:l.unavailable||[],preferred:l.preferred||[]})):base.lessons);
   st.timetable={...base.timetable,...(raw.timetable||{})};if(oldLab&&!raw.timetable){st.timetable.placements=(oldLab.placements||[]).map(p=>({...p,week:p.week||0}));st.timetable.view={kind:oldLab.view?.kind||'class',id:oldLab.view?.id||'c11',week:0};st.timetable.settings={...base.timetable.settings,...(oldLab.settings||{})}}
-  st.lessons.forEach(l=>{l.unavailable=Array.isArray(l.unavailable)?l.unavailable:[];l.preferred=Array.isArray(l.preferred)?l.preferred:[]});st.timetable.undo=[];st.timetable.redo=[];st.operations={...base.operations,...(raw.operations||{})};st.drive={...base.drive,...(raw.drive||{})};st.ui={...base.ui,...(raw.ui||{})};normalizeResources(st);
+  st.lessons.forEach(l=>{l.unavailable=Array.isArray(l.unavailable)?l.unavailable:[];l.preferred=Array.isArray(l.preferred)?l.preferred:[];l.blockSize=Math.max(1,Math.min(3,Number(l.blockSize||1)))});st.timetable.undo=[];st.timetable.redo=[];st.operations={...base.operations,...(raw.operations||{})};st.drive={...base.drive,...(raw.drive||{})};st.ui={...base.ui,...(raw.ui||{})};normalizeResources(st);
   if(oldSchema<5&&st.school.type==='elementary'&&(!Array.isArray(raw.hourPlans)||raw.hourPlans.length<=3))applySchoolTypeDefaults(st,'elementary');
   if(oldSchema<6){const mixedElementary=st.school.type==='elementary'&&st.hourPlans.length!==6;const mixedJhs=st.school.type==='junior_high'&&st.hourPlans.length!==3;if(mixedElementary||mixedJhs)applySchoolTypeDefaults(st,st.school.type);}
+  if(oldSchema<7)for(const l of st.lessons)l.blockSize=Math.max(1,Math.min(3,Number(l.blockSize||1)));
   return st;
 }
 
@@ -166,6 +167,7 @@ export function validateState(st,calendarStats){
   const issues=[],push=(level,code,title,desc)=>issues.push({level,code,title,desc});if(!st.school.name?.trim())push('ERROR','BASIC-SCHOOL','学校名が未入力','学校名を入力してください。');if(!st.school.principal?.trim())push('WARNING','BASIC-PRINCIPAL','校長名が未入力','帳票に必要な場合は入力してください。');if(!st.goals.educationGoal?.trim())push('WARNING','GOAL-EMPTY','学校教育目標が未入力','学校教育目標を入力してください。');if((calendarStats?.instructionDays||0)<150)push('WARNING','CAL-DAYS-LOW','年間授業日数が少なめです',`現在の計算値は${calendarStats?.instructionDays||0}日です。学期範囲・休業日・土曜授業を確認してください。`);
   const classIds=new Set(st.resources.classes.map(x=>x.id)),teacherIds=new Set(st.resources.teachers.map(x=>x.id)),facilityIds=new Set(st.resources.facilities.map(x=>x.id));for(const l of st.lessons){if(!l.classIds?.length)push('ERROR','LESSON-NOCLASS',`${l.name||l.subject}の学級未設定`,'授業には少なくとも1学級が必要です。');for(const id of l.classIds||[])if(!classIds.has(id))push('ERROR','LESSON-BADCLASS',`${l.name||l.subject}の学級参照エラー`,id);if(!l.allowTeacherTBD&&!(l.teacherIds||[]).filter(Boolean).length)push('WARNING','LESSON-NOTEACHER',`${l.name||l.subject}の担当未定`,'仮配置を許可するか、担当教員を設定してください。');for(const id of(l.teacherIds||[]).filter(Boolean))if(!teacherIds.has(id))push('ERROR','LESSON-BADTEACHER',`${l.name||l.subject}の教員参照エラー`,id);if(l.facilityId&&!facilityIds.has(l.facilityId))push('ERROR','LESSON-BADFACILITY',`${l.name||l.subject}の施設参照エラー`,l.facilityId)}
   for(const p of st.hourPlans){const sum=(p.subjects||[]).reduce((a,s)=>a+Number(s.hours||0),0);if(Number(p.annualTarget||0)!==sum)push('WARNING','HOURS-TOTAL',`${p.grade}年の年間標準時数と内訳が不一致`,`目標${p.annualTarget}、教科等の合計${sum}です。`)}
+  if(calendarStats?.instructionDays){for(const l of st.lessons){const bs=Math.max(1,Number(l.blockSize||1));if(bs>1){const req=cycleSessionsForLesson(st,l,calendarStats.instructionDays);if(req%bs!==0)push('WARNING','LESSON-BLOCK-REMAINDER',`${l.subject}の連続コマ設定を確認`,`サイクル必要${req}コマに対し${bs}コマ連続設定のため、最後に${req%bs}コマの端数が生じます。サイクル週数や年間時数を確認してください。`)}}}
   const std=standardUnitMinutesForSchool(st.school.type),actual=Number(st.school.lessonMinutes||std);if(actual!==std)push('INFO','UNIT-CONVERSION','授業時間を換算して時間割を編成',`${st.school.type==='elementary'?'小学校':'中学校'}の標準1単位時間${std}分に対し、実施1コマ${actual}分で換算します。`);
   const seen=new Set();for(const p of st.timetable.placements||[]){if(seen.has(p.id))push('ERROR','TT-DUPID','時間割データID重複',p.id);seen.add(p.id)}return issues;
 }
