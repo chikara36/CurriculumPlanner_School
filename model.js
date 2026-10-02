@@ -1,5 +1,5 @@
-export const APP_VERSION='1.1.0';
-export const SCHEMA_VERSION=5;
+export const APP_VERSION='1.1.1';
+export const SCHEMA_VERSION=6;
 export const DAYS=['月','火','水','木','金'];
 
 export const DEFAULT_SUBJECTS_JHS=[
@@ -132,6 +132,7 @@ export function migrateState(raw){
   st.timetable={...base.timetable,...(raw.timetable||{})};if(oldLab&&!raw.timetable){st.timetable.placements=(oldLab.placements||[]).map(p=>({...p,week:p.week||0}));st.timetable.view={kind:oldLab.view?.kind||'class',id:oldLab.view?.id||'c11',week:0};st.timetable.settings={...base.timetable.settings,...(oldLab.settings||{})}}
   st.lessons.forEach(l=>{l.unavailable=Array.isArray(l.unavailable)?l.unavailable:[];l.preferred=Array.isArray(l.preferred)?l.preferred:[]});st.timetable.undo=[];st.timetable.redo=[];st.operations={...base.operations,...(raw.operations||{})};st.drive={...base.drive,...(raw.drive||{})};st.ui={...base.ui,...(raw.ui||{})};normalizeResources(st);
   if(oldSchema<5&&st.school.type==='elementary'&&(!Array.isArray(raw.hourPlans)||raw.hourPlans.length<=3))applySchoolTypeDefaults(st,'elementary');
+  if(oldSchema<6){const mixedElementary=st.school.type==='elementary'&&st.hourPlans.length!==6;const mixedJhs=st.school.type==='junior_high'&&st.hourPlans.length!==3;if(mixedElementary||mixedJhs)applySchoolTypeDefaults(st,st.school.type);}
   return st;
 }
 
