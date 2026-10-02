@@ -1,5 +1,5 @@
-export const APP_VERSION='1.2.0';
-export const SCHEMA_VERSION=7;
+export const APP_VERSION='1.3.0';
+export const SCHEMA_VERSION=8;
 export const DAYS=['月','火','水','木','金'];
 
 export const DEFAULT_SUBJECTS_JHS=[
@@ -8,6 +8,16 @@ export const DEFAULT_SUBJECTS_JHS=[
 export const DEFAULT_SUBJECTS_ES=[
   ['japanese','国語'],['social','社会'],['math','算数'],['science','理科'],['life','生活'],['music','音楽'],['art','図画工作'],['home','家庭'],['pe','体育'],['foreign_activity','外国語活動'],['english','外国語'],['moral','道徳'],['integrated','総合的な学習の時間'],['special','特別活動']
 ];
+
+export const DEFAULT_ROLE_NAMES=['教科主任','学年主任','学級担任','生徒指導','教務','進路指導','特別支援教育コーディネーター','保健主事','図書館担当'];
+function subjectCategory(id){return ['moral','integrated','special'].includes(id)?'領域等':'教科'}
+export function defaultMastersForType(type){
+  const src=type==='elementary'?DEFAULT_SUBJECTS_ES:DEFAULT_SUBJECTS_JHS;
+  return {
+    subjects:src.map(([id,name])=>({id,name,category:subjectCategory(id),custom:false,active:true})),
+    roles:DEFAULT_ROLE_NAMES.map((name,i)=>({id:`role_${i+1}`,name,custom:false,active:true}))
+  };
+}
 
 export function uid(prefix='id'){return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2,9)}`}
 export function deepClone(v){return typeof structuredClone==='function'?structuredClone(v):JSON.parse(JSON.stringify(v))}
@@ -28,7 +38,7 @@ export function implementationExactPeriods(st,standardUnits,grade=null){
   return Math.max(0,Number(standardUnits||0))*std/actual;
 }
 
-function teacher(id,name,role,subjects){return {id,name,role,subjects,substituteEligible:true,unavailable:[],leaves:[],maxDaily:5,maxConsecutive:3,consecutiveHard:false,breakRule:{enabled:false,startPeriod:3,endPeriod:4,minFreeSlots:1,hard:false}}}
+function teacher(id,name,role,subjects){const roles=DEFAULT_ROLE_NAMES.includes(role)?[role]:[];return {id,name,role,roles,subjects,substituteEligible:true,unavailable:[],leaves:[],maxDaily:5,maxConsecutive:3,consecutiveHard:false,breakRule:{enabled:false,startPeriod:3,endPeriod:4,minFreeSlots:1,hard:false}}}
 function jhsHourPlans(){
   const y1={japanese:140,social:105,math:140,science:105,music:45,art:45,pe:105,tech:70,english:140,moral:35,integrated:50,special:35};
   const y2={japanese:140,social:105,math:105,science:140,music:35,art:35,pe:105,tech:70,english:140,moral:35,integrated:70,special:35};
@@ -101,10 +111,10 @@ function defaultLessons(classes,teachers,hourPlans,type='junior_high'){
 function profileParts(type){
   const normalized=type==='elementary'?'elementary':'junior_high';
   const classes=classesForType(normalized),hourPlans=defaultHourPlansForType(normalized),teachers=teachersForType(normalized,classes),facilities=facilitiesForType(normalized);
-  return {type:normalized,classes,hourPlans,teachers,facilities,periods:periodsForType(normalized),lessons:defaultLessons(classes,teachers,hourPlans,normalized),lessonMinutes:standardUnitMinutesForSchool(normalized)};
+  return {type:normalized,classes,hourPlans,teachers,facilities,periods:periodsForType(normalized),lessons:defaultLessons(classes,teachers,hourPlans,normalized),lessonMinutes:standardUnitMinutesForSchool(normalized),masters:defaultMastersForType(normalized)};
 }
 export function applySchoolTypeDefaults(st,type){
-  const p=profileParts(type);st.school.type=p.type;st.school.lessonMinutes=p.lessonMinutes;st.hourPlans=p.hourPlans;st.resources={classes:p.classes,teachers:p.teachers,facilities:p.facilities};st.periods=p.periods;st.lessons=p.lessons;
+  const p=profileParts(type);st.school.type=p.type;st.school.lessonMinutes=p.lessonMinutes;st.hourPlans=p.hourPlans;st.resources={classes:p.classes,teachers:p.teachers,facilities:p.facilities};st.periods=p.periods;st.lessons=p.lessons;st.masters=p.masters;
   st.integrated={plans:p.type==='elementary'?[{id:uid('int'),grade:3,title:'',hours:70,linkedEventIds:[]}]:[{id:uid('int'),grade:1,title:'',hours:50,linkedEventIds:[]}]};
   st.timetable={...(st.timetable||{}),placements:[],view:{kind:'class',id:p.classes[0]?.id||'',week:0},undo:[],redo:[],lastResult:null};
   st.operations={absences:[],temporarySchedules:[]};st.updatedAt=new Date().toISOString();return st;
@@ -117,7 +127,7 @@ export function defaultState(){
     goals:{educationGoal:'',focusItems:[{id:'focus_inquiry',label:'探究的な学び',text:''},{id:'focus_individual',label:'個別最適・協働的な学び',text:''},{id:'focus_support',label:'特別支援教育',text:''},{id:'focus_career',label:'キャリア教育',text:''}],featureTags:[],featureSummary:''},
     calendar:{holidayRuleVersion:'JP-HOLIDAY-2026.10',terms:[{id:'t1',name:'1学期',start:`${fy}-04-06`,end:`${fy}-07-20`},{id:'t2',name:'2学期',start:`${fy}-09-01`,end:`${fy}-12-23`},{id:'t3',name:'3学期',start:`${fy+1}-01-08`,end:`${fy+1}-03-24`}],exceptions:[],events:[{id:uid('ev'),date:`${fy}-04-06`,name:'始業式',category:'儀式的行事',countsAsInstruction:true},{id:uid('ev'),date:`${fy}-04-07`,name:'入学式',category:'儀式的行事',countsAsInstruction:true},{id:uid('ev'),date:`${fy}-09-25`,name:'体育大会',category:'体育的行事',countsAsInstruction:true},{id:uid('ev'),date:`${fy+1}-03-24`,name:'修了式',category:'儀式的行事',countsAsInstruction:true}]},
     instruction:{manualWeeklyTarget:false,weeklyTargetOverride:null,cycleWeeks:2,maxPeriods:6,dailyPatternMode:'auto'},hourPlans:p.hourPlans,
-    adjusted:{enabled:false,rules:{maxReductionRate:.15,minHours:35,excludeAtOrBelow:35},allocations:[]},integrated:{plans:[{id:uid('int'),grade:1,title:'地域課題をテーマにした探究',hours:50,linkedEventIds:[]}]},periods:p.periods,
+    adjusted:{enabled:false,rules:{maxReductionRate:.15,minHours:35,excludeAtOrBelow:35},allocations:[]},integrated:{plans:[{id:uid('int'),grade:1,title:'地域課題をテーマにした探究',hours:50,linkedEventIds:[]}]},masters:p.masters,periods:p.periods,
     resources:{classes:p.classes,teachers:p.teachers,facilities:p.facilities},lessons:p.lessons,
     timetable:{cycleWeeks:2,placements:[],view:{kind:'class',id:'c11',week:0},settings:{studentNoGaps:true,avoidSameSubjectTwice:true,avoidLastPE:true,restarts:24,repairDepth:2},lastResult:null,undo:[],redo:[]},
     operations:{absences:[],temporarySchedules:[]},drive:{clientId:'',folderName:'CurriculumPlanner',fileId:'',folderId:'',lastSyncAt:null,autoSync:false},ui:{page:'basic',scheduleTab:'board',resourceTab:'classes',reportType:'summary'}};
@@ -127,19 +137,25 @@ export function migrateState(raw){
   if(!raw||typeof raw!=='object')return defaultState();
   const base=defaultState(),oldSchema=Number(raw.schemaVersion||0),st={...base,...raw};st.schemaVersion=SCHEMA_VERSION;st.appVersion=APP_VERSION;st.updatedAt=new Date().toISOString();st.school={...base.school,...(raw.school||raw.schoolInfo||{})};
   st.goals={...base.goals,...(raw.goals||{})};st.calendar={...base.calendar,...(raw.calendar||{})};st.calendar.terms=Array.isArray(st.calendar.terms)?st.calendar.terms:base.calendar.terms;st.calendar.exceptions=Array.isArray(st.calendar.exceptions)?st.calendar.exceptions:[];st.calendar.events=Array.isArray(st.calendar.events)?st.calendar.events:[];st.instruction={...base.instruction,...(raw.instruction||{})};
-  st.hourPlans=Array.isArray(raw.hourPlans)?raw.hourPlans:base.hourPlans;st.adjusted={...base.adjusted,...(raw.adjusted||{})};st.integrated={...base.integrated,...(raw.integrated||{})};st.periods=Array.isArray(raw.periods)?raw.periods:base.periods;const oldLab=raw.scheduleLab;st.resources=raw.resources||base.resources;
+  st.hourPlans=Array.isArray(raw.hourPlans)?raw.hourPlans:base.hourPlans;st.adjusted={...base.adjusted,...(raw.adjusted||{})};st.integrated={...base.integrated,...(raw.integrated||{})};st.masters={...base.masters,...(raw.masters||{})};st.masters.subjects=Array.isArray(st.masters.subjects)?st.masters.subjects:base.masters.subjects;st.masters.roles=Array.isArray(st.masters.roles)?st.masters.roles:base.masters.roles;st.periods=Array.isArray(raw.periods)?raw.periods:base.periods;const oldLab=raw.scheduleLab;st.resources=raw.resources||base.resources;
   st.lessons=Array.isArray(raw.lessons)?raw.lessons:(oldLab?.lessons?oldLab.lessons.map(l=>({id:l.id,name:l.subject||l.name,subject:l.subject||l.name,classIds:l.classIds||[],teacherIds:l.teacherIds||[],facilityId:l.roomId||'normal',annualHours:35,cycleSessionsOverride:l.sessions||null,blockSize:1,type:l.type||'normal',syncGroup:'',allowTeacherTBD:false,allowFacilityTBD:false,unavailable:l.unavailable||[],preferred:l.preferred||[]})):base.lessons);
   st.timetable={...base.timetable,...(raw.timetable||{})};if(oldLab&&!raw.timetable){st.timetable.placements=(oldLab.placements||[]).map(p=>({...p,week:p.week||0}));st.timetable.view={kind:oldLab.view?.kind||'class',id:oldLab.view?.id||'c11',week:0};st.timetable.settings={...base.timetable.settings,...(oldLab.settings||{})}}
   st.lessons.forEach(l=>{l.unavailable=Array.isArray(l.unavailable)?l.unavailable:[];l.preferred=Array.isArray(l.preferred)?l.preferred:[];l.blockSize=Math.max(1,Math.min(3,Number(l.blockSize||1)))});st.timetable.undo=[];st.timetable.redo=[];st.operations={...base.operations,...(raw.operations||{})};st.drive={...base.drive,...(raw.drive||{})};st.ui={...base.ui,...(raw.ui||{})};normalizeResources(st);
   if(oldSchema<5&&st.school.type==='elementary'&&(!Array.isArray(raw.hourPlans)||raw.hourPlans.length<=3))applySchoolTypeDefaults(st,'elementary');
   if(oldSchema<6){const mixedElementary=st.school.type==='elementary'&&st.hourPlans.length!==6;const mixedJhs=st.school.type==='junior_high'&&st.hourPlans.length!==3;if(mixedElementary||mixedJhs)applySchoolTypeDefaults(st,st.school.type);}
   if(oldSchema<7)for(const l of st.lessons)l.blockSize=Math.max(1,Math.min(3,Number(l.blockSize||1)));
+  if(oldSchema<8){
+    const subjectNames=new Set(st.masters.subjects.map(x=>x.name));
+    for(const hp of st.hourPlans)for(const x of hp.subjects||[])if(!subjectNames.has(x.name)){st.masters.subjects.push({id:x.id||uid('sub'),name:x.name,category:'学校設定教科等',custom:true,active:true});subjectNames.add(x.name)}
+    for(const l of st.lessons)if(l.subject&&!subjectNames.has(l.subject)){st.masters.subjects.push({id:uid('sub'),name:l.subject,category:'学校設定教科等',custom:true,active:true});subjectNames.add(l.subject)}
+    for(const t of st.resources.teachers)for(const name of t.subjects||[])if(name&&!subjectNames.has(name)){st.masters.subjects.push({id:uid('sub'),name,category:'学校設定教科等',custom:true,active:true});subjectNames.add(name)}
+  }
   return st;
 }
 
 export function normalizeResources(st){
   st.resources=st.resources||{classes:[],teachers:[],facilities:[]};st.resources.classes=Array.isArray(st.resources.classes)?st.resources.classes:[];st.resources.teachers=Array.isArray(st.resources.teachers)?st.resources.teachers:[];st.resources.facilities=Array.isArray(st.resources.facilities)?st.resources.facilities:[];
-  for(const t of st.resources.teachers){t.subjects=Array.isArray(t.subjects)?t.subjects:[];t.substituteEligible=t.substituteEligible!==false;t.unavailable=Array.isArray(t.unavailable)?t.unavailable:[];t.leaves=Array.isArray(t.leaves)?t.leaves:[];t.maxDaily=Number(t.maxDaily||5);t.maxConsecutive=Number(t.maxConsecutive||3);t.consecutiveHard=!!t.consecutiveHard;t.breakRule={enabled:false,startPeriod:3,endPeriod:4,minFreeSlots:1,hard:false,...(t.breakRule||{})}}
+  for(const t of st.resources.teachers){t.subjects=Array.isArray(t.subjects)?t.subjects:[];t.roles=Array.isArray(t.roles)?t.roles:(DEFAULT_ROLE_NAMES.includes(t.role)?[t.role]:[]);t.substituteEligible=t.substituteEligible!==false;t.unavailable=Array.isArray(t.unavailable)?t.unavailable:[];t.leaves=Array.isArray(t.leaves)?t.leaves:[];t.maxDaily=Number(t.maxDaily||5);t.maxConsecutive=Number(t.maxConsecutive||3);t.consecutiveHard=!!t.consecutiveHard;t.breakRule={enabled:false,startPeriod:3,endPeriod:4,minFreeSlots:1,hard:false,...(t.breakRule||{})}}
   for(const f of st.resources.facilities){f.capacity=Math.max(1,Number(f.capacity||1));f.unavailable=Array.isArray(f.unavailable)?f.unavailable:[]}
 }
 export function classById(st,id){return st.resources.classes.find(x=>x.id===id)}
