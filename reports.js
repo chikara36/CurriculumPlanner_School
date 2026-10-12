@@ -1,5 +1,5 @@
 import {calendarStats,monthMatrix,weeklyTargetForGrade,dailyPattern} from './calendar.js';
-import {classById,teacherById,facilityById,lessonById,DAYS,cycleSessionsForLesson} from './model.js';
+import {classById,teacherById,facilityById,lessonById,DAYS,cycleSessionsForLesson,discretionaryLedger,effectiveSubjectHours,effectiveInstructionHours} from './model.js';
 function esc(s){return String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
 function fmtDate(s){if(!s)return '';const [y,m,d]=s.split('-');return `${Number(y)}年${Number(m)}月${Number(d)}日`}
 function fiscalMonths(fy){const a=[];for(let i=0;i<12;i++){const m=(3+i)%12,y=fy+(m<3?1:0);a.push([y,m])}return a}
@@ -11,7 +11,19 @@ export function summaryReport(state){
   <h3>3 年間授業日数</h3><p>${stats.instructionDays}日（週換算 ${stats.weeks.toFixed(1)}週）</p>
   <h3>4 年間計画時数</h3><table class="report-table"><tr><th>学年</th><th>年間計画</th><th>内訳合計</th><th>週平均</th></tr>${rows}</table>`)
 }
-export function hoursReport(state){const stats=calendarStats(state);let html='';for(const p of state.hourPlans){html+=`<h3>${p.grade}年</h3><table class="report-table"><tr><th>教科等</th><th>年間時数</th><th>調整</th><th>調整後</th></tr>${p.subjects.map(s=>`<tr><td>${esc(s.name)}</td><td>${Number(s.hours||0)}</td><td>${Number(s.adjustment||0)}</td><td>${Number(s.hours||0)+Number(s.adjustment||0)}</td></tr>`).join('')}</table><p>週平均：${weeklyTargetForGrade(state,p.grade,stats).avg.toFixed(2)}コマ</p>`}return wrap(state,'授業時数配当表',html)}
+export function hoursReport(state){
+ const stats=calendarStats(state);let html='';
+ for(const p of state.hourPlans){
+  const ledger=discretionaryLedger(state,p.grade);
+  html+=`<h3>${p.grade}年｜調整授業時数・裁量の時間</h3><p>減じた時数 ${ledger.reductions}時間 / 再配分 ${ledger.allocated+ledger.legacyAdds}時間 / 残り ${ledger.remaining}時間</p>
+  <table class="report-table"><tr><th>教科等</th><th>基準</th><th>減少・旧調整</th><th>裁量から上乗せ</th><th>最終配当</th></tr>
+  ${p.subjects.map(x=>{const allocated=ledger.allocations.filter(a=>a.subject===x.name&&a.kind!=='training').reduce((sum,a)=>sum+Number(a.hours||0),0);return `<tr><td>${esc(x.name)}</td><td>${Number(x.hours||0)}</td><td>${Number(x.adjustment||0)}</td><td>${allocated}</td><td>${effectiveSubjectHours(state,p.grade,x.name)}</td></tr>`}).join('')}
+  </table><h4>裁量の時間の配分先</h4><table class="report-table"><tr><th>使途</th><th>教科・枠</th><th>年間時数</th><th>内容</th></tr>
+  ${ledger.allocations.map(x=>`<tr><td>${esc(({subject:'教科上乗せ',new_subject:'新設教科',learning:'学習枠',training:'研修枠'})[x.kind]||x.kind)}</td><td>${esc(x.subject||'教員研修')}</td><td>${Number(x.hours||0)}</td><td>${esc(x.note||'')}</td></tr>`).join('')}</table>
+  <p>生徒の年間計画時数：${effectiveInstructionHours(state,p.grade)}単位 / 週平均：${weeklyTargetForGrade(state,p.grade,stats).avg.toFixed(2)}コマ。研修枠は生徒時間割に含めない。</p>`;
+ }
+ return wrap(state,'授業時数配当表・裁量時間収支',html);
+}
 export function calendarReport(state){
   const stats=calendarStats(state),fy=Number(state.school.fiscalYear);let html='';
   for(const [y,m] of fiscalMonths(fy)){const mat=monthMatrix(y,m);html+=`<div style="break-inside:avoid;margin-bottom:10px"><h3>${y}年${m+1}月</h3><table class="report-table"><tr>${['月','火','水','木','金','土','日'].map(x=>`<th>${x}</th>`).join('')}</tr>`;for(let r=0;r<6;r++){html+='<tr>';for(let c=0;c<7;c++){const item=mat[r*7+c],k=`${item.date.getFullYear()}-${String(item.date.getMonth()+1).padStart(2,'0')}-${String(item.date.getDate()).padStart(2,'0')}`,x=stats.byDate[k];let note='';if(item.inMonth&&x){if(x.holiday)note=x.holiday;else if(x.exception)note=x.exception.label||x.exception.type;else if(x.instruction)note='授業日'}html+=`<td style="height:19mm;vertical-align:top;${!item.inMonth?'color:#aaa':''}"><strong>${item.date.getDate()}</strong><br><span style="font-size:8px">${esc(note)}</span></td>`}html+='</tr>'}html+='</table></div>'}
