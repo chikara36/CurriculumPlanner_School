@@ -32,3 +32,14 @@ assert(app.includes('syncSubjectLessons'));
 assert(!app.includes('l.teacherIds=tid?[tid]:[];state.timetable.placements=[]'));
 assert(app.includes('if(!confirm('));
 console.log('Curriculum School regression tests passed');
+
+const {discretionaryLedger,effectiveInstructionHours,effectiveSubjectHours}=await import('../model.js');
+const plan=st.hourPlans.find(x=>x.grade===1);const science2=plan.subjects.find(x=>x.name==='理科');science2.adjustment=-30;
+st.adjusted.allocations.push({id:'a1',grade:1,kind:'subject',subject:'数学',hours:10});
+st.adjusted.allocations.push({id:'a2',grade:1,kind:'learning',subject:'学習枠',hours:8});
+st.adjusted.allocations.push({id:'a3',grade:1,kind:'training',subject:'',hours:12});
+assert.equal(discretionaryLedger(st,1).remaining,0);
+assert.equal(discretionaryLedger(st,1).instructional,18);
+assert.equal(effectiveSubjectHours(st,1,'学習枠'),8);
+assert.equal(effectiveInstructionHours(st,1),plan.subjects.reduce((a,x)=>a+x.hours,0)-30+18);
+console.log('Discretionary ledger regression passed');
