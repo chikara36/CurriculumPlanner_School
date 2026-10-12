@@ -1,5 +1,5 @@
-export const APP_VERSION='1.3.1';
-export const SCHEMA_VERSION=9;
+export const APP_VERSION='1.4.0';
+export const SCHEMA_VERSION=10;
 export const DAYS=['月','火','水','木','金'];
 
 export const DEFAULT_SUBJECTS_JHS=[
@@ -38,6 +38,28 @@ export function implementationExactPeriods(st,standardUnits,grade=null){
   return Math.max(0,Number(standardUnits||0))*std/actual;
 }
 
+export function discretionaryLedger(st,grade){
+ const p=st.hourPlans.find(x=>Number(x.grade)===Number(grade));
+ const reductions=(p?.subjects||[]).reduce((a,x)=>a+Math.max(0,-Number(x.adjustment||0)),0);
+ const legacyAdds=(p?.subjects||[]).reduce((a,x)=>a+Math.max(0,Number(x.adjustment||0)),0);
+ const allocations=(st.adjusted?.allocations||[]).filter(x=>Number(x.grade)===Number(grade));
+ const allocated=allocations.reduce((a,x)=>a+Math.max(0,Number(x.hours||0)),0);
+ const instructional=allocations.filter(x=>x.kind!=='training').reduce((a,x)=>a+Math.max(0,Number(x.hours||0)),0);
+ return {reductions,legacyAdds,allocated,instructional,remaining:reductions-legacyAdds-allocated,allocations};
+}
+export function effectiveSubjectHours(st,grade,subject){
+ const p=st.hourPlans.find(x=>Number(x.grade)===Number(grade));
+ const row=p?.subjects?.find(x=>x.name===subject);
+ const base=Math.max(0,Number(row?.hours||0)+Number(row?.adjustment||0));
+ const adds=(st.adjusted?.allocations||[]).filter(x=>Number(x.grade)===Number(grade)&&x.kind!=='training'&&x.subject===subject).reduce((a,x)=>a+Math.max(0,Number(x.hours||0)),0);
+ return Math.max(0,base+adds);
+}
+export function effectiveInstructionHours(st,grade){
+ const p=st.hourPlans.find(x=>Number(x.grade)===Number(grade));
+ const names=new Set((p?.subjects||[]).map(x=>x.name));
+ for(const a of st.adjusted?.allocations||[])if(Number(a.grade)===Number(grade)&&a.kind!=='training'&&a.subject)names.add(a.subject);
+ return [...names].reduce((n,name)=>n+effectiveSubjectHours(st,grade,name),0);
+}
 function teacher(id,name,role,subjects){const roles=DEFAULT_ROLE_NAMES.includes(role)?[role]:[];return {id,name,role,roles,subjects,substituteEligible:true,unavailable:[],leaves:[],maxDaily:5,maxConsecutive:3,consecutiveHard:false,breakRule:{enabled:false,startPeriod:3,endPeriod:4,minFreeSlots:1,hard:false}}}
 function jhsHourPlans(){
   const y1={japanese:140,social:105,math:140,science:105,music:45,art:45,pe:105,tech:70,english:140,moral:35,integrated:50,special:35};
@@ -137,7 +159,7 @@ export function migrateState(raw){
   if(!raw||typeof raw!=='object')return defaultState();
   const base=defaultState(),oldSchema=Number(raw.schemaVersion||0),st={...base,...raw};st.schemaVersion=SCHEMA_VERSION;st.appVersion=APP_VERSION;st.updatedAt=new Date().toISOString();st.school={...base.school,...(raw.school||raw.schoolInfo||{})};
   st.goals={...base.goals,...(raw.goals||{})};st.calendar={...base.calendar,...(raw.calendar||{})};st.calendar.terms=Array.isArray(st.calendar.terms)?st.calendar.terms:base.calendar.terms;st.calendar.exceptions=Array.isArray(st.calendar.exceptions)?st.calendar.exceptions:[];st.calendar.events=Array.isArray(st.calendar.events)?st.calendar.events:[];st.instruction={...base.instruction,...(raw.instruction||{})};
-  st.hourPlans=Array.isArray(raw.hourPlans)?raw.hourPlans:base.hourPlans;st.adjusted={...base.adjusted,...(raw.adjusted||{})};st.integrated={...base.integrated,...(raw.integrated||{})};st.masters={...base.masters,...(raw.masters||{})};st.masters.subjects=Array.isArray(st.masters.subjects)?st.masters.subjects:base.masters.subjects;st.masters.roles=Array.isArray(st.masters.roles)?st.masters.roles:base.masters.roles;st.periods=Array.isArray(raw.periods)?raw.periods:base.periods;const oldLab=raw.scheduleLab;st.resources=raw.resources||base.resources;
+  st.hourPlans=Array.isArray(raw.hourPlans)?raw.hourPlans:base.hourPlans;st.adjusted={...base.adjusted,...(raw.adjusted||{})};st.adjusted.allocations=Array.isArray(st.adjusted.allocations)?st.adjusted.allocations:[];st.integrated={...base.integrated,...(raw.integrated||{})};st.masters={...base.masters,...(raw.masters||{})};st.masters.subjects=Array.isArray(st.masters.subjects)?st.masters.subjects:base.masters.subjects;st.masters.roles=Array.isArray(st.masters.roles)?st.masters.roles:base.masters.roles;st.periods=Array.isArray(raw.periods)?raw.periods:base.periods;const oldLab=raw.scheduleLab;st.resources=raw.resources||base.resources;
   st.lessons=Array.isArray(raw.lessons)?raw.lessons:(oldLab?.lessons?oldLab.lessons.map(l=>({id:l.id,name:l.subject||l.name,subject:l.subject||l.name,classIds:l.classIds||[],teacherIds:l.teacherIds||[],facilityId:l.roomId||'normal',annualHours:35,cycleSessionsOverride:l.sessions||null,blockSize:1,type:l.type||'normal',syncGroup:'',allowTeacherTBD:false,allowFacilityTBD:false,unavailable:l.unavailable||[],preferred:l.preferred||[]})):base.lessons);
   st.timetable={...base.timetable,...(raw.timetable||{})};if(oldLab&&!raw.timetable){st.timetable.placements=(oldLab.placements||[]).map(p=>({...p,week:p.week||0}));st.timetable.view={kind:oldLab.view?.kind||'class',id:oldLab.view?.id||'c11',week:0};st.timetable.settings={...base.timetable.settings,...(oldLab.settings||{})}}
   st.lessons.forEach(l=>{l.unavailable=Array.isArray(l.unavailable)?l.unavailable:[];l.preferred=Array.isArray(l.preferred)?l.preferred:[];l.blockSize=Math.max(1,Math.min(3,Number(l.blockSize||1)))});st.timetable.undo=[];st.timetable.redo=[];st.operations={...base.operations,...(raw.operations||{})};st.drive={...base.drive,...(raw.drive||{})};st.ui={...base.ui,...(raw.ui||{})};normalizeResources(st);
@@ -170,14 +192,14 @@ export function subjectAnnualHours(st,grade,subject){const p=hourPlanForGrade(st
 export function cycleAllocationForGrade(st,grade,instructionDays){
   const hp=hourPlanForGrade(st,grade),weeks=instructionWeeksFromDays(instructionDays),cycle=Number(st.timetable.cycleWeeks||st.instruction.cycleWeeks||1);if(!hp||!weeks)return {};
   const ratio=standardUnitMinutesForSchool(st.school.type,grade)/Math.max(1,Number(st.school.lessonMinutes||standardUnitMinutesForSchool(st.school.type,grade)));
-  const adjustedTotal=(hp.subjects||[]).reduce((n,s)=>n+Math.max(0,Number(s.hours||0)+Number(s.adjustment||0)),0);const annualImpl=implementationPeriodsForStandardUnits(st,adjustedTotal,grade);const target=Math.max(0,Math.round((annualImpl/weeks)*cycle));
-  const rows=(hp.subjects||[]).map(s=>{const annual=Math.max(0,Number(s.hours||0)+Number(s.adjustment||0))*ratio;const raw=(annual/weeks)*cycle;return {name:s.name,base:Math.floor(raw),rem:raw-Math.floor(raw)}});
+  const adjustedTotal=effectiveInstructionHours(st,grade);const annualImpl=implementationPeriodsForStandardUnits(st,adjustedTotal,grade);const target=Math.max(0,Math.round((annualImpl/weeks)*cycle));
+  const subjects=new Set((hp.subjects||[]).map(x=>x.name));for(const a of st.adjusted?.allocations||[])if(Number(a.grade)===Number(grade)&&a.kind!=='training'&&a.subject)subjects.add(a.subject);const rows=[...subjects].map(name=>{const annual=effectiveSubjectHours(st,grade,name)*ratio;const raw=(annual/weeks)*cycle;return {name,base:Math.floor(raw),rem:raw-Math.floor(raw)}});
   let used=rows.reduce((a,x)=>a+x.base,0),left=Math.max(0,target-used);rows.sort((a,b)=>b.rem-a.rem);for(let i=0;i<left&&rows.length;i++)rows[i%rows.length].base++;return Object.fromEntries(rows.map(x=>[x.name,x.base]));
 }
 export function cycleSessionsForLesson(st,lesson,instructionDays){
   if(lesson.cycleSessionsOverride!==null&&lesson.cycleSessionsOverride!==''&&lesson.cycleSessionsOverride!==undefined)return Math.max(0,Number(lesson.cycleSessionsOverride));
   const cls=classById(st,lesson.classIds?.[0]),alloc=cycleAllocationForGrade(st,cls?.grade,instructionDays);if(lesson.subject in alloc)return Math.max(0,Number(alloc[lesson.subject]));
-  const annual=Number(lesson.annualHours||subjectAnnualHours(st,cls?.grade,lesson.subject)||0),weeks=instructionWeeksFromDays(instructionDays);if(!weeks)return 0;const impl=implementationPeriodsForStandardUnits(st,annual,cls?.grade);return Math.max(0,Math.round((impl/weeks)*Number(st.timetable.cycleWeeks||st.instruction.cycleWeeks||1)));
+  const annual=effectiveSubjectHours(st,cls?.grade,lesson.subject)||Number(lesson.annualHours||0),weeks=instructionWeeksFromDays(instructionDays);if(!weeks)return 0;const impl=implementationPeriodsForStandardUnits(st,annual,cls?.grade);return Math.max(0,Math.round((impl/weeks)*Number(st.timetable.cycleWeeks||st.instruction.cycleWeeks||1)));
 }
 
 export function validateState(st,calendarStats){
@@ -186,6 +208,7 @@ export function validateState(st,calendarStats){
   for(const p of st.hourPlans){const sum=(p.subjects||[]).reduce((a,s)=>a+Number(s.hours||0),0);if(Number(p.annualTarget||0)!==sum)push('WARNING','HOURS-TOTAL',`${p.grade}年の年間標準時数と内訳が不一致`,`目標${p.annualTarget}、教科等の合計${sum}です。`)}
   if(calendarStats?.instructionDays){for(const l of st.lessons){const bs=Math.max(1,Number(l.blockSize||1));if(bs>1){const req=cycleSessionsForLesson(st,l,calendarStats.instructionDays);if(req%bs!==0)push('WARNING','LESSON-BLOCK-REMAINDER',`${l.subject}の連続コマ設定を確認`,`サイクル必要${req}コマに対し${bs}コマ連続設定のため、最後に${req%bs}コマの端数が生じます。サイクル週数や年間時数を確認してください。`)}}}
   for(const hp of st.hourPlans){for(const subj of hp.subjects||[])if(Number(subj.hours||0)+Number(subj.adjustment||0)<0)push('ERROR','HOURS-NEGATIVE',`${hp.grade}年 ${subj.name}の調整後時数がマイナス`,'減少時数を見直してください。')}
+  for(const hp of st.hourPlans){const ledger=discretionaryLedger(st,hp.grade);if(ledger.remaining<0)push('ERROR','ADJUSTMENT-OVERSPENT',`${hp.grade}年の裁量時数が不足`,`${-ledger.remaining}時間超過しています。`);else if(ledger.remaining>0&&ledger.reductions>0)push('WARNING','ADJUSTMENT-UNALLOCATED',`${hp.grade}年に未配分の裁量時数`,`${ledger.remaining}時間が未配分です。`)}
   const std=standardUnitMinutesForSchool(st.school.type),actual=Number(st.school.lessonMinutes||std);if(actual!==std)push('INFO','UNIT-CONVERSION','授業時間を換算して時間割を編成',`${st.school.type==='elementary'?'小学校':'中学校'}の標準1単位時間${std}分に対し、実施1コマ${actual}分で換算します。`);
   const seen=new Set();for(const p of st.timetable.placements||[]){if(seen.has(p.id))push('ERROR','TT-DUPID','時間割データID重複',p.id);seen.add(p.id)}return issues;
 }
