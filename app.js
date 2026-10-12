@@ -1,4 +1,4 @@
-import {APP_VERSION,SCHEMA_VERSION,defaultState,migrateState,deepClone,uid,DAYS,classById,teacherById,facilityById,lessonById,cycleSessionsForLesson,validateState,normalizeResources,applySchoolTypeDefaults,standardUnitMinutesForSchool,implementationPeriodsForStandardUnits,implementationExactPeriods} from './model.js';
+import {APP_VERSION,SCHEMA_VERSION,defaultState,migrateState,deepClone,uid,DAYS,classById,teacherById,facilityById,lessonById,cycleSessionsForLesson,validateState,normalizeResources,applySchoolTypeDefaults,standardUnitMinutesForSchool,implementationPeriodsForStandardUnits,implementationExactPeriods,discretionaryLedger,effectiveSubjectHours} from './model.js';
 import {loadState,saveState,downloadText,readFile} from './storage.js';
 import {calendarStats,weeklyTargetForGrade,dailyPattern,gradePatterns,monthMatrix,typeLabel,isoDate} from './calendar.js';
 import {solveSchedule,scheduleMetrics,movePlacement,placeLesson,absenceProposals,buildSolverModel} from './solver-client.js';
@@ -99,8 +99,8 @@ function renderDays(){
 }
 
 function syncSubjectLessons(grade,subject){
-  const plan=state.hourPlans.find(x=>Number(x.grade)===Number(grade));const sp=plan?.subjects.find(x=>x.name===subject);if(!sp)return;
-  const adjusted=Math.max(0,n(sp.hours)+n(sp.adjustment));
+  const plan=state.hourPlans.find(x=>Number(x.grade)===Number(grade));const sp=plan?.subjects.find(x=>x.name===subject);if(!plan)return;if(!sp)plan.subjects.push({id:uid('sub'),name:subject,hours:0,adjustment:0});
+  const adjusted=effectiveSubjectHours(state,grade,subject);
   for(const c of state.resources.classes.filter(x=>Number(x.grade)===Number(grade))){
     const existing=state.lessons.find(l=>l.subject===subject&&(l.classIds||[]).length===1&&l.classIds[0]===c.id);
     if(existing){existing.annualHours=adjusted;continue}
@@ -110,15 +110,29 @@ function syncSubjectLessons(grade,subject){
 }
 function updateHourAdjustment(pi,si,value){
   const hp=state.hourPlans[pi],subj=hp?.subjects?.[si];if(!subj)return;
-  const minimum=-Math.max(0,n(subj.hours));subj.adjustment=Math.max(minimum,Math.round(n(value)));
+  const minimum=-Math.max(0,n(subj.hours));subj.adjustment=Math.min(0,Math.max(minimum,Math.round(n(value))));
   syncSubjectLessons(hp.grade,subj.name);state.updatedAt=new Date().toISOString();metricsCache=null;absenceCache=null;scheduleSave();render();refreshMetrics();
 }
+
 function renderHours(){
  const stats=calendarStats(state);
- return pageHead('05 授業時数','標準授業時数と調整後の時数を分けて管理します。スライダーで試算し、実施必要コマ・週平均へ自動反映します。')+
- `<div class="notice info" style="margin-bottom:12px">調整スライダーは学校内の試算用です。表示範囲を制度上の減少上限や新設教科の要件と同一視しないでください。正式な制度・適用条件は別途確認が必要です。変更前にJSONバックアップを推奨します。</div>
- <div class="grid">${state.hourPlans.map((p,pi)=>{const w=weeklyTargetForGrade(state,p.grade,stats);const base=(p.subjects||[]).reduce((a,x)=>a+n(x.hours),0);const adjusted=(p.subjects||[]).reduce((a,x)=>a+Math.max(0,n(x.hours)+n(x.adjustment)),0);
- return card(`${p.grade}年`,`<div class="inline" style="margin-bottom:9px"><span class="chip neutral">標準 ${base}単位</span><span class="chip info">調整後 ${adjusted}単位</span><span class="chip ${w.lessonMinutes===w.standardMinutes?'ok':'warn'}">実施 ${w.annual}コマ</span><span class="chip neutral">週平均 ${w.avg.toFixed(2)}</span></div><div class="table-wrap"><table class="table"><thead><tr><th>教科等</th><th>基準時数</th><th>時数調整（試算）</th><th>調整値</th><th>調整後</th><th>実施コマ</th></tr></thead><tbody>${p.subjects.map((x,si)=>{const v=n(x.adjustment),hours=n(x.hours),max=Math.max(35,Math.ceil(hours*.3)),min=-Math.min(hours,max),total=Math.max(0,hours+v);return `<tr><td>${esc(x.name)}</td><td>${input(`hourPlans.${pi}.subjects.${si}.hours`,hours,'number','data-number data-rerender')}</td><td style="min-width:180px"><input type="range" min="${min}" max="${max}" step="1" value="${Math.min(max,Math.max(min,v))}" data-hours-adjust="${pi}-${si}" style="width:100%" aria-label="${attr(x.name)}の時数調整"><div class="help">${min} ～ +${max}（試算用）</div></td><td><input type="number" data-hours-number="${pi}-${si}" value="${v}" style="width:76px"></td><td class="num"><strong>${total}</strong></td><td class="num">${implementationPeriodsForStandardUnits(state,total,p.grade)}</td></tr>`}).join('')}<tr class="total"><td>合計</td><td class="num">${base}</td><td colspan="2">調整差 ${adjusted-base>=0?'+':''}${adjusted-base}</td><td class="num"><strong>${adjusted}</strong></td><td class="num"><strong>${implementationPeriodsForStandardUnits(state,adjusted,p.grade)}</strong></td></tr></tbody></table></div><div class="help" style="margin-top:8px">標準1単位=${w.standardMinutes}分 / 実施1コマ=${w.lessonMinutes}分。必要時数と授業定義は教科・学年・学級ごとに更新します。</div>`)}).join('')}</div>`;
+ return pageHead('05 裁量時数・配当','①教科時数を減ずる → ②裁量の時間として確保 → ③学習・教科上乗せ・新設教科・研修へ配分 → ④時間割へ反映します。')+
+ `<div class="notice info" style="margin-bottom:12px">本画面は制度検討・学校計画のための配当支援です。正式な調整授業時数制度の減少上限、対象教科、研修への充当条件などを確定するものではありません。研修枠は生徒の授業時数に加算しません。</div>
+ <div class="grid">${state.hourPlans.map((p,pi)=>{const w=weeklyTargetForGrade(state,p.grade,stats),ledger=discretionaryLedger(state,p.grade),base=p.subjects.reduce((a,x)=>a+n(x.hours),0);
+ return card(`${p.grade}年｜裁量時間の収支`,`
+ <div class="inline" style="margin-bottom:10px"><span class="chip info">減じた時数 ${ledger.reductions}時間</span><span class="chip neutral">配分済 ${ledger.allocated+ledger.legacyAdds}時間</span><span class="chip ${ledger.remaining<0?'err':ledger.remaining>0?'warn':'ok'}">残り ${ledger.remaining}時間</span><span class="chip neutral">生徒の年間 ${w.standardAnnual}単位 / 週平均 ${w.avg.toFixed(2)}コマ</span></div>
+ <h4>① 各教科から減ずる時数</h4>
+ <div class="table-wrap"><table class="table"><thead><tr><th>教科等</th><th>基準</th><th>減ずる時数</th><th>減少量</th><th>調整後</th></tr></thead><tbody>${p.subjects.filter(x=>n(x.hours)>0).map(x=>{const si=p.subjects.indexOf(x),v=Math.min(0,n(x.adjustment)),hours=n(x.hours),limit=Math.min(hours,Math.max(35,Math.ceil(hours*.3)));return `<tr><td>${esc(x.name)}</td><td class="num">${hours}</td><td style="min-width:190px"><input type="range" min="-${limit}" max="0" step="1" value="${Math.max(-limit,v)}" data-hours-adjust="${pi}-${si}" style="width:100%" aria-label="${attr(x.name)}から減ずる時数"></td><td><input type="number" min="-${hours}" max="0" value="${v}" data-hours-number="${pi}-${si}" style="width:78px"></td><td class="num">${hours+v}</td></tr>`}).join('')}</tbody></table></div>
+ <h4 style="margin-top:14px">② 裁量の時間を配分する</h4>
+ <div class="table-wrap"><table class="table"><thead><tr><th>使途</th><th>教科・枠</th><th>年間時数</th><th>備考</th><th></th></tr></thead><tbody>
+ ${ledger.allocations.map(a=>`<tr><td>${esc(({subject:'既存教科へ上乗せ',new_subject:'新設教科',learning:'学習枠',training:'研修枠'})[a.kind]||a.kind)}</td><td>${esc(a.subject||'教員研修')}</td><td class="num">${n(a.hours)}</td><td>${esc(a.note||'')}</td><td><button class="btn small danger" data-action="removeDiscretionary" data-id="${a.id}">削除</button></td></tr>`).join('')||'<tr><td colspan="5" class="muted">まだ配分していません。</td></tr>'}</tbody></table></div>
+ <div class="form-grid" style="margin-top:10px">
+ ${field('使途',`<select id="allocKind_${p.grade}" data-action="allocKind" data-grade="${p.grade}"><option value="subject">既存教科へ上乗せ</option><option value="new_subject">新設教科</option><option value="learning">学習枠</option><option value="training">研修枠</option></select>`,'span3')}
+ ${field('教科・新設教科',`<select id="allocSubject_${p.grade}">${(state.masters.subjects||[]).map(x=>`<option value="${attr(x.name)}">${esc(x.name)}</option>`).join('')}</select><input id="allocNewSubject_${p.grade}" placeholder="新設教科名（新設教科を選択時）" style="margin-top:5px">`,'span4')}
+ ${field('時数',`<input type="number" min="1" step="1" id="allocHours_${p.grade}" value="${Math.max(1,ledger.remaining)}">`,'span2')}
+ ${field('使途の説明',`<input id="allocNote_${p.grade}" placeholder="例：探究的な学習・校内研修">`,'span3')}
+ </div><div class="inline" style="margin-top:9px"><button class="btn primary" data-action="addDiscretionary" data-grade="${p.grade}">＋ 裁量時間から配分</button></div>
+ <div class="notice ${ledger.remaining<0?'warn':ledger.remaining===0?'ok':'info'}" style="margin-top:10px">基準時数 ${base} → 減少 ${ledger.reductions} → 生徒への再配分 ${ledger.instructional} / 研修 ${ledger.allocations.filter(x=>x.kind==='training').reduce((sum,x)=>sum+n(x.hours),0)}。裁量残高は ${ledger.remaining} 時間。時間割に入れるのは教科・新設教科・学習枠のみです。</div>`)}).join('')}</div>`;
 }
 
 function renderIntegrated(){
@@ -248,6 +262,28 @@ async function handleClick(e){
     if(a==='teacherMaster'){showTeacherMasterModal(b.dataset.id);return}
     if(a==='teacherConstraints'){showTeacherConstraints(b.dataset.id);return}
     if(a==='saveTeacherMaster'){const t=teacherById(state,b.dataset.id);if(t){t.subjects=selectedValues('teacherMasterSubjects');t.roles=selectedValues('teacherMasterRoles');closeModal();scheduleSave();render();refreshMetrics()}return}
+    if(a==='addDiscretionary'){
+      const grade=Number(b.dataset.grade),kind=$('#allocKind_'+grade)?.value,hours=Math.round(n($('#allocHours_'+grade)?.value)),note=$('#allocNote_'+grade)?.value.trim()||'',ledger=discretionaryLedger(state,grade);
+      if(!(hours>0))return toast('配分時数を1時間以上で指定してください','warn');
+      if(hours>ledger.remaining)return toast(`裁量時間の残高は${ledger.remaining}時間です。超過配分できません`,'warn');
+      let subject='';
+      if(kind==='subject')subject=$('#allocSubject_'+grade)?.value||'';
+      if(kind==='new_subject'){subject=$('#allocNewSubject_'+grade)?.value.trim();if(!subject)return toast('新設教科名を入力してください','warn')}
+      if(kind==='learning')subject='学習枠';
+      if(kind==='training')subject='';
+      if(kind!=='training'&&!subject)return toast('教科・枠を指定してください','warn');
+      if(subject&&!(state.masters.subjects||[]).some(x=>x.name===subject)){const id=uid('sub');state.masters.subjects.push({id,name:subject,category:kind==='learning'?'学習枠':'学校設定教科',custom:true,active:true})}
+      if(subject){const hp=state.hourPlans.find(x=>Number(x.grade)===grade);if(hp&&!hp.subjects.some(x=>x.name===subject))hp.subjects.push({id:uid('sub'),name:subject,hours:0,adjustment:0})}
+      state.adjusted.allocations.push({id:uid('alloc'),grade,kind,subject,hours,note});
+      if(subject)syncSubjectLessons(grade,subject);
+      metricsCache=null;absenceCache=null;scheduleSave();render();refreshMetrics();return;
+    }
+    if(a==='removeDiscretionary'){
+      const a0=state.adjusted.allocations.find(x=>x.id===b.dataset.id);if(!a0)return;
+      state.adjusted.allocations=state.adjusted.allocations.filter(x=>x.id!==a0.id);
+      if(a0.subject)syncSubjectLessons(a0.grade,a0.subject);
+      metricsCache=null;absenceCache=null;scheduleSave();render();refreshMetrics();return;
+    }
     if(a==='addSubjectMaster'){const name=$('#newSubjectName')?.value.trim(),category=$('#newSubjectCategory')?.value||'学校設定教科';if(!name)return toast('教科・領域名を入力してください','warn');if((state.masters.subjects||[]).some(x=>x.name===name))return toast('同名の教科・領域が登録済みです','warn');const id=uid('sub');state.masters.subjects.push({id,name,category,custom:true,active:true});for(const hp of state.hourPlans)if(!(hp.subjects||[]).some(x=>x.name===name))hp.subjects.push({id,name,hours:0,adjustment:0});scheduleSave();render();toast(`${name}を教科マスタと授業時数表に追加しました。STEP05で時数を指定すると授業設定も生成します`,'ok');return}
     if(a==='removeSubjectMaster'){const x=(state.masters.subjects||[]).find(y=>y.id===b.dataset.id);if(!x||!x.custom)return;const usedLesson=state.lessons.some(l=>l.subject===x.name),usedTeacher=state.resources.teachers.some(t=>(t.subjects||[]).includes(x.name)),usedHours=state.hourPlans.some(hp=>(hp.subjects||[]).some(q=>q.name===x.name&&(n(q.hours)||n(q.adjustment))));if(usedLesson||usedTeacher||usedHours)return toast('授業・教員・授業時数で使用中のため削除できません','warn');state.masters.subjects=state.masters.subjects.filter(y=>y.id!==x.id);for(const hp of state.hourPlans)hp.subjects=(hp.subjects||[]).filter(q=>q.name!==x.name);scheduleSave();render();return}
     if(a==='addRoleMaster'){const name=$('#newRoleName')?.value.trim();if(!name)return toast('役割名を入力してください','warn');if((state.masters.roles||[]).some(x=>x.name===name))return toast('同名の役割が登録済みです','warn');state.masters.roles.push({id:uid('role'),name,custom:true,active:true});scheduleSave();render();toast(`${name}を役割マスタに追加しました`,'ok');return}
@@ -296,6 +332,7 @@ function handleChange(e){
   const a=e.target.dataset.action;
   if(a==='scheduleViewId'){state.timetable.view.id=e.target.value;scheduleSave();render()}
   if(a==='reportType'){state.ui.reportType=e.target.value;scheduleSave();renderReportPreview()}
+  if(a==='allocKind'){const g=Number(e.target.dataset.grade),el=$('#allocNewSubject_'+g);if(el)el.placeholder=e.target.value==='new_subject'?'新設教科の名称を入力':'新設教科を選択するときだけ入力';}
   if(a==='assignmentTeacher'){const l=lessonById(state,e.target.dataset.lessonId);if(l){const tid=e.target.value;l.teacherIds=tid?[tid]:[];metricsCache=null;absenceCache=null;state.timetable.lastResult=null;scheduleSave();refreshMetrics();render();toast('担当教員を更新しました。既存の時間割は保持し、制約を再確認します','ok')}}
   if(a==='assignmentBlock'){const l=lessonById(state,e.target.dataset.lessonId);if(l){const oldBlock=l.blockSize||1;l.blockSize=Math.max(1,Math.min(3,Number(e.target.value||1)));const affected=state.timetable.placements.filter(p=>p.lessonId===l.id);if(affected.length&&!confirm('この授業の配置済みコマだけ解除して連続ブロックを再編成します。続けますか？')){l.blockSize=oldBlock;render();return}pushUndo();const groupIds=new Set(affected.map(p=>p.blockId).filter(Boolean));state.timetable.placements=state.timetable.placements.filter(p=>p.lessonId!==l.id&&!groupIds.has(p.blockId));metricsCache=null;scheduleSave();refreshMetrics();render()}}
 }
