@@ -19,3 +19,5 @@ jobs:
             cp "$f" /tmp/check.mjs
             node --check /tmp/check.mjs
           done
+      - name: Regression tests
+        run: node tests/regression.mjs
