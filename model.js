@@ -1,5 +1,5 @@
-export const APP_VERSION='1.3.0';
-export const SCHEMA_VERSION=8;
+export const APP_VERSION='1.3.1';
+export const SCHEMA_VERSION=9;
 export const DAYS=['月','火','水','木','金'];
 
 export const DEFAULT_SUBJECTS_JHS=[
@@ -150,12 +150,13 @@ export function migrateState(raw){
     for(const l of st.lessons)if(l.subject&&!subjectNames.has(l.subject)){st.masters.subjects.push({id:uid('sub'),name:l.subject,category:'学校設定教科等',custom:true,active:true});subjectNames.add(l.subject)}
     for(const t of st.resources.teachers)for(const name of t.subjects||[])if(name&&!subjectNames.has(name)){st.masters.subjects.push({id:uid('sub'),name,category:'学校設定教科等',custom:true,active:true});subjectNames.add(name)}
   }
+  if(oldSchema<9){for(const t of st.resources.teachers){if(!t.roles?.length&&t.role&&!st.masters.roles.some(r=>r.name===t.role)){st.masters.roles.push({id:uid('role'),name:t.role,custom:true,active:true});t.roles=[t.role]}}}
   return st;
 }
 
 export function normalizeResources(st){
   st.resources=st.resources||{classes:[],teachers:[],facilities:[]};st.resources.classes=Array.isArray(st.resources.classes)?st.resources.classes:[];st.resources.teachers=Array.isArray(st.resources.teachers)?st.resources.teachers:[];st.resources.facilities=Array.isArray(st.resources.facilities)?st.resources.facilities:[];
-  for(const t of st.resources.teachers){t.subjects=Array.isArray(t.subjects)?t.subjects:[];t.roles=Array.isArray(t.roles)?t.roles:(DEFAULT_ROLE_NAMES.includes(t.role)?[t.role]:[]);t.substituteEligible=t.substituteEligible!==false;t.unavailable=Array.isArray(t.unavailable)?t.unavailable:[];t.leaves=Array.isArray(t.leaves)?t.leaves:[];t.maxDaily=Number(t.maxDaily||5);t.maxConsecutive=Number(t.maxConsecutive||3);t.consecutiveHard=!!t.consecutiveHard;t.breakRule={enabled:false,startPeriod:3,endPeriod:4,minFreeSlots:1,hard:false,...(t.breakRule||{})}}
+  for(const t of st.resources.teachers){t.subjects=Array.isArray(t.subjects)?t.subjects:[];t.roles=Array.isArray(t.roles)?t.roles:(t.role?[t.role]:[]);t.substituteEligible=t.substituteEligible!==false;t.unavailable=Array.isArray(t.unavailable)?t.unavailable:[];t.leaves=Array.isArray(t.leaves)?t.leaves:[];t.maxDaily=Number(t.maxDaily||5);t.maxConsecutive=Number(t.maxConsecutive||3);t.consecutiveHard=!!t.consecutiveHard;t.breakRule={enabled:false,startPeriod:3,endPeriod:4,minFreeSlots:1,hard:false,...(t.breakRule||{})}}
   for(const f of st.resources.facilities){f.capacity=Math.max(1,Number(f.capacity||1));f.unavailable=Array.isArray(f.unavailable)?f.unavailable:[]}
 }
 export function classById(st,id){return st.resources.classes.find(x=>x.id===id)}
@@ -169,8 +170,8 @@ export function subjectAnnualHours(st,grade,subject){const p=hourPlanForGrade(st
 export function cycleAllocationForGrade(st,grade,instructionDays){
   const hp=hourPlanForGrade(st,grade),weeks=instructionWeeksFromDays(instructionDays),cycle=Number(st.timetable.cycleWeeks||st.instruction.cycleWeeks||1);if(!hp||!weeks)return {};
   const ratio=standardUnitMinutesForSchool(st.school.type,grade)/Math.max(1,Number(st.school.lessonMinutes||standardUnitMinutesForSchool(st.school.type,grade)));
-  const annualImpl=implementationPeriodsForStandardUnits(st,Number(hp.annualTarget||0),grade);const target=Math.max(0,Math.round((annualImpl/weeks)*cycle));
-  const rows=(hp.subjects||[]).map(s=>{const annual=Number(s.hours||0)*ratio;const raw=(annual/weeks)*cycle;return {name:s.name,base:Math.floor(raw),rem:raw-Math.floor(raw)}});
+  const adjustedTotal=(hp.subjects||[]).reduce((n,s)=>n+Math.max(0,Number(s.hours||0)+Number(s.adjustment||0)),0);const annualImpl=implementationPeriodsForStandardUnits(st,adjustedTotal,grade);const target=Math.max(0,Math.round((annualImpl/weeks)*cycle));
+  const rows=(hp.subjects||[]).map(s=>{const annual=Math.max(0,Number(s.hours||0)+Number(s.adjustment||0))*ratio;const raw=(annual/weeks)*cycle;return {name:s.name,base:Math.floor(raw),rem:raw-Math.floor(raw)}});
   let used=rows.reduce((a,x)=>a+x.base,0),left=Math.max(0,target-used);rows.sort((a,b)=>b.rem-a.rem);for(let i=0;i<left&&rows.length;i++)rows[i%rows.length].base++;return Object.fromEntries(rows.map(x=>[x.name,x.base]));
 }
 export function cycleSessionsForLesson(st,lesson,instructionDays){
@@ -184,6 +185,7 @@ export function validateState(st,calendarStats){
   const classIds=new Set(st.resources.classes.map(x=>x.id)),teacherIds=new Set(st.resources.teachers.map(x=>x.id)),facilityIds=new Set(st.resources.facilities.map(x=>x.id));for(const l of st.lessons){if(!l.classIds?.length)push('ERROR','LESSON-NOCLASS',`${l.name||l.subject}の学級未設定`,'授業には少なくとも1学級が必要です。');for(const id of l.classIds||[])if(!classIds.has(id))push('ERROR','LESSON-BADCLASS',`${l.name||l.subject}の学級参照エラー`,id);if(!l.allowTeacherTBD&&!(l.teacherIds||[]).filter(Boolean).length)push('WARNING','LESSON-NOTEACHER',`${l.name||l.subject}の担当未定`,'仮配置を許可するか、担当教員を設定してください。');for(const id of(l.teacherIds||[]).filter(Boolean))if(!teacherIds.has(id))push('ERROR','LESSON-BADTEACHER',`${l.name||l.subject}の教員参照エラー`,id);if(l.facilityId&&!facilityIds.has(l.facilityId))push('ERROR','LESSON-BADFACILITY',`${l.name||l.subject}の施設参照エラー`,l.facilityId)}
   for(const p of st.hourPlans){const sum=(p.subjects||[]).reduce((a,s)=>a+Number(s.hours||0),0);if(Number(p.annualTarget||0)!==sum)push('WARNING','HOURS-TOTAL',`${p.grade}年の年間標準時数と内訳が不一致`,`目標${p.annualTarget}、教科等の合計${sum}です。`)}
   if(calendarStats?.instructionDays){for(const l of st.lessons){const bs=Math.max(1,Number(l.blockSize||1));if(bs>1){const req=cycleSessionsForLesson(st,l,calendarStats.instructionDays);if(req%bs!==0)push('WARNING','LESSON-BLOCK-REMAINDER',`${l.subject}の連続コマ設定を確認`,`サイクル必要${req}コマに対し${bs}コマ連続設定のため、最後に${req%bs}コマの端数が生じます。サイクル週数や年間時数を確認してください。`)}}}
+  for(const hp of st.hourPlans){for(const subj of hp.subjects||[])if(Number(subj.hours||0)+Number(subj.adjustment||0)<0)push('ERROR','HOURS-NEGATIVE',`${hp.grade}年 ${subj.name}の調整後時数がマイナス`,'減少時数を見直してください。')}
   const std=standardUnitMinutesForSchool(st.school.type),actual=Number(st.school.lessonMinutes||std);if(actual!==std)push('INFO','UNIT-CONVERSION','授業時間を換算して時間割を編成',`${st.school.type==='elementary'?'小学校':'中学校'}の標準1単位時間${std}分に対し、実施1コマ${actual}分で換算します。`);
   const seen=new Set();for(const p of st.timetable.placements||[]){if(seen.has(p.id))push('ERROR','TT-DUPID','時間割データID重複',p.id);seen.add(p.id)}return issues;
 }
