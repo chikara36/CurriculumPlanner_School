@@ -3,7 +3,7 @@ const nodes=new Map();
 function node(sel){if(!nodes.has(sel))nodes.set(sel,{innerHTML:'',textContent:'',className:'',hidden:false,addEventListener(){},appendChild(){},remove(){}});return nodes.get(sel)}
 globalThis.document={body:node('body'),querySelector:node,querySelectorAll:()=>[],createElement:()=>node('created')};
 globalThis.window={addEventListener(){},onLine:true};
-globalThis.navigator={onLine:true};
+Object.defineProperty(globalThis,'navigator',{configurable:true,value:{onLine:true}});
 await import('../app.js');
 await new Promise(resolve=>setTimeout(resolve,100));
 assert(!document.body.innerHTML.includes('起動エラー'),document.body.innerHTML);
