@@ -1,4 +1,4 @@
-import {APP_VERSION,SCHEMA_VERSION,defaultState,migrateState,deepClone,uid,DAYS,classById,teacherById,facilityById,lessonById,cycleSessionsForLesson,validateState,normalizeResources,applySchoolTypeDefaults,standardUnitMinutesForSchool,implementationPeriodsForStandardUnits,implementationExactPeriods,discretionaryLedger,effectiveSubjectHours} from './model.js';
+import {APP_VERSION,SCHEMA_VERSION,defaultState,migrateState,deepClone,uid,DAYS,classById,teacherById,facilityById,lessonById,cycleSessionsForLesson,validateState,normalizeResources,applySchoolTypeDefaults,standardUnitMinutesForSchool,implementationPeriodsForStandardUnits,implementationExactPeriods,discretionaryLedger,effectiveSubjectHours,maxSubjectReduction,subjectReductionPercent} from './model.js';
 import {loadState,saveState,downloadText,readFile} from './storage.js';
 import {calendarStats,weeklyTargetForGrade,dailyPattern,gradePatterns,monthMatrix,typeLabel,isoDate} from './calendar.js';
 import {solveSchedule,scheduleMetrics,movePlacement,placeLesson,absenceProposals,buildSolverModel} from './solver-client.js';
@@ -110,19 +110,21 @@ function syncSubjectLessons(grade,subject){
 }
 function updateHourAdjustment(pi,si,value){
   const hp=state.hourPlans[pi],subj=hp?.subjects?.[si];if(!subj)return;
-  const minimum=-Math.max(0,n(subj.hours));subj.adjustment=Math.min(0,Math.max(minimum,Math.round(n(value))));
+  const minimum=-maxSubjectReduction(subj.hours),requested=Math.round(n(value));
+  if(requested<minimum)toast(`減少できるのは基準時数の15％まで（${-minimum}コマ）です`,'warn');
+  subj.adjustment=Math.min(0,Math.max(minimum,requested));
   syncSubjectLessons(hp.grade,subj.name);state.updatedAt=new Date().toISOString();metricsCache=null;absenceCache=null;scheduleSave();render();refreshMetrics();
 }
 
 function renderHours(){
  const stats=calendarStats(state);
  return pageHead('05 裁量時数・配当','①教科時数を減ずる → ②裁量の時間として確保 → ③学習・教科上乗せ・新設教科・研修へ配分 → ④時間割へ反映します。')+
- `<div class="notice info" style="margin-bottom:12px">本画面は制度検討・学校計画のための配当支援です。正式な調整授業時数制度の減少上限、対象教科、研修への充当条件などを確定するものではありません。研修枠は生徒の授業時数に加算しません。</div>
+ `<div class="notice info" style="margin-bottom:12px">本画面は制度検討・学校計画のための配当支援です。各教科の減少は基準時数の最大15％（整数コマは切り捨て）かつ減少後35コマ以上で制限します。制度上の他の要件、対象教科、研修枠への充当条件は別途確認が必要です。研修枠は生徒の授業時数に加算しません。</div>
  <div class="grid">${state.hourPlans.map((p,pi)=>{const w=weeklyTargetForGrade(state,p.grade,stats),ledger=discretionaryLedger(state,p.grade),base=p.subjects.reduce((a,x)=>a+n(x.hours),0);
  return card(`${p.grade}年｜裁量時間の収支`,`
  <div class="inline" style="margin-bottom:10px"><span class="chip info">減じた時数 ${ledger.reductions}時間</span><span class="chip neutral">配分済 ${ledger.allocated+ledger.legacyAdds}時間</span><span class="chip ${ledger.remaining<0?'err':ledger.remaining>0?'warn':'ok'}">残り ${ledger.remaining}時間</span><span class="chip neutral">生徒の年間 ${w.standardAnnual}単位 / 週平均 ${w.avg.toFixed(2)}コマ</span></div>
  <h4>① 各教科から減ずる時数</h4>
- <div class="table-wrap"><table class="table"><thead><tr><th>教科等</th><th>基準</th><th>減ずる時数</th><th>減少量</th><th>調整後</th></tr></thead><tbody>${p.subjects.filter(x=>n(x.hours)>0).map(x=>{const si=p.subjects.indexOf(x),v=Math.min(0,n(x.adjustment)),hours=n(x.hours),limit=Math.min(hours,Math.max(35,Math.ceil(hours*.3)));return `<tr><td>${esc(x.name)}</td><td class="num">${hours}</td><td style="min-width:190px"><input type="range" min="-${limit}" max="0" step="1" value="${Math.max(-limit,v)}" data-hours-adjust="${pi}-${si}" style="width:100%" aria-label="${attr(x.name)}から減ずる時数"></td><td><input type="number" min="-${hours}" max="0" value="${v}" data-hours-number="${pi}-${si}" style="width:78px"></td><td class="num">${hours+v}</td></tr>`}).join('')}</tbody></table></div>
+ <div class="table-wrap"><table class="table"><thead><tr><th>教科等</th><th>基準</th><th>減ずる時数</th><th>減少量</th><th>減少率</th><th>調整後</th></tr></thead><tbody>${p.subjects.filter(x=>n(x.hours)>0).map(x=>{const si=p.subjects.indexOf(x),v=Math.min(0,n(x.adjustment)),hours=n(x.hours),limit=maxSubjectReduction(hours),percent=subjectReductionPercent(hours,v),over=-v>limit;return `<tr><td>${esc(x.name)}</td><td class="num">${hours}</td><td style="min-width:190px"><input type="range" min="-${limit}" max="0" step="1" value="${Math.max(-limit,v)}" data-hours-adjust="${pi}-${si}" style="width:100%" aria-label="${attr(x.name)}から減ずる時数（上限15％）" ${limit===0?'disabled':''}><div class="help">最大 ${limit}コマ（15％以内）</div></td><td><input type="number" min="-${limit}" max="0" value="${v}" data-hours-number="${pi}-${si}" style="width:78px" ${limit===0?'disabled':''}></td><td class="num">${over?'<span class="badge err">超過</span><br>':''}<strong>${percent.toFixed(1)}％</strong></td><td class="num">${hours+v}</td></tr>`}).join('')}</tbody></table></div>
  <h4 style="margin-top:14px">② 裁量の時間を配分する</h4>
  <div class="table-wrap"><table class="table"><thead><tr><th>使途</th><th>教科・枠</th><th>年間時数</th><th>備考</th><th></th></tr></thead><tbody>
  ${ledger.allocations.map(a=>`<tr><td>${esc(({subject:'既存教科へ上乗せ',new_subject:'新設教科',learning:'学習枠',training:'研修枠'})[a.kind]||a.kind)}</td><td>${esc(a.subject||'教員研修')}</td><td class="num">${n(a.hours)}</td><td>${esc(a.note||'')}</td><td><button class="btn small danger" data-action="removeDiscretionary" data-id="${a.id}">削除</button></td></tr>`).join('')||'<tr><td colspan="5" class="muted">まだ配分していません。</td></tr>'}</tbody></table></div>
