@@ -30,8 +30,8 @@ function navState(page){if(page==='timetable'&&metricsCache){if(metricsCache.har
 
 async function init(){
   const raw=await loadState().catch(()=>null);state=migrateState(raw||defaultState());normalizeResources(state);state.timetable.cycleWeeks=n(state.timetable.cycleWeeks||state.instruction.cycleWeeks,2);state.instruction.cycleWeeks=state.timetable.cycleWeeks;
-  bindGlobal();render();refreshMetrics();
-  if('serviceWorker' in navigator){navigator.serviceWorker.register('./sw.js').catch(e=>console.warn(e))}
+  bindGlobal();render();window.dispatchEvent(new Event('curriculum-ready'));refreshMetrics();
+  if('serviceWorker' in navigator){navigator.serviceWorker.register('./sw.js',{updateViaCache:'none'}).catch(e=>console.warn(e))}
 }
 function bindGlobal(){
   window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();deferredPrompt=e;$('#installBtn').hidden=false});
