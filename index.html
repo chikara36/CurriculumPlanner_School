@@ -17,7 +17,7 @@
     <div class="brand">
       <div class="kicker">CURRICULUM PLANNER</div>
       <h1>教育課程編成支援<br>School</h1>
-      <div class="ver">v1.4.1 / PWA・学校単独版</div>
+      <div class="ver">v1.4.2 / PWA・学校単独版</div>
     </div>
     <div id="nav"></div>
     <div class="storage-card" id="storageCard"><span class="lamp"></span><strong>端末内に自動保存</strong><br>Drive同期は任意。学校の編集はオフラインでも継続できます。</div>
@@ -41,6 +41,27 @@
 </div>
 <div class="toast-wrap" id="toasts"></div>
 <div id="modalRoot"></div>
-<script type="module" src="./app.js?v=1.4.1"></script>
+<script>
+(function(){
+  let started=false;
+  window.addEventListener('curriculum-ready',function(){started=true});
+  function show(message){
+    if(started)return;
+    const root=document.getElementById('content');
+    if(!root||root.textContent.trim())return;
+    const wrap=document.createElement('section');
+    wrap.style.cssText='padding:22px;background:#fff;border:1px solid #ddd;border-radius:12px;margin:24px;line-height:1.8;';
+    const title=document.createElement('h2');title.textContent='アプリを起動できませんでした';wrap.append(title);
+    const desc=document.createElement('p');desc.textContent='保存済みの学校データは削除していません。以下のエラーをコピーしてお知らせください。';wrap.append(desc);
+    const pre=document.createElement('pre');pre.style.cssText='white-space:pre-wrap;overflow-wrap:anywhere;';pre.textContent=String(message);wrap.append(pre);
+    const copy=document.createElement('button');copy.textContent='エラー内容をコピー';copy.className='btn';copy.onclick=function(){navigator.clipboard?.writeText(pre.textContent)};wrap.append(copy);
+    root.replaceChildren(wrap);
+  }
+  window.addEventListener('error',e=>show(e.message+' ('+(e.filename||'')+':'+(e.lineno||'')+')'));
+  window.addEventListener('unhandledrejection',e=>show(e.reason?.stack||e.reason||'予期しないエラー'));
+  setTimeout(()=>{if(!started)show('起動が完了しませんでした。オフライン・キャッシュ・読み込みエラーの可能性があります。')},6000);
+})();
+</script>
+<script type="module" src="./app.js?v=1.4.2"></script>
 </body>
 </html>
