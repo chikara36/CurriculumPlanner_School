@@ -1,4 +1,4 @@
-const CACHE='curriculum-planner-school-v1.4.1';
+const CACHE='curriculum-planner-school-v1.4.2';
 const CORE=[
   './','./index.html','./styles.css','./app.js','./model.js','./storage.js','./calendar.js','./drive.js','./reports.js','./solver-client.js','./solver.worker.js','./manifest.webmanifest','./icons/icon-192.png','./icons/icon-512.png'
 ];
@@ -8,5 +8,5 @@ self.addEventListener('fetch',e=>{
   const u=new URL(e.request.url);
   if(u.origin!==self.location.origin){return;}
   if(e.request.method!=='GET')return;
-  e.respondWith(fetch(e.request).then(res=>{const copy=res.clone();caches.open(CACHE).then(c=>c.put(e.request,copy));return res;}).catch(()=>caches.match(e.request).then(cached=>cached||caches.match('./index.html'))));
+  e.respondWith(fetch(e.request).then(res=>{const copy=res.clone();if(res.ok)caches.open(CACHE).then(c=>c.put(e.request,copy));return res;}).catch(()=>caches.match(e.request).then(cached=>cached||(e.request.mode==='navigate'?caches.match('./index.html'):Response.error()))));
 });
