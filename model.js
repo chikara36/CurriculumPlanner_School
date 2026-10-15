@@ -1,5 +1,5 @@
-export const APP_VERSION='1.4.0';
-export const SCHEMA_VERSION=10;
+export const APP_VERSION='1.4.1';
+export const SCHEMA_VERSION=11;
 export const DAYS=['月','火','水','木','金'];
 
 export const DEFAULT_SUBJECTS_JHS=[
@@ -38,6 +38,15 @@ export function implementationExactPeriods(st,standardUnits,grade=null){
   return Math.max(0,Number(standardUnits||0))*std/actual;
 }
 
+// Maximum whole standard periods reducible by a subject: 15%, with a 35-period floor.
+export function maxSubjectReduction(standardHours){
+ const hours=Math.max(0,Math.floor(Number(standardHours)||0));
+ if(hours<=35)return 0;
+ return Math.max(0,Math.min(Math.floor(hours*0.15+1e-9),hours-35));
+}
+export function subjectReductionPercent(standardHours,adjustment){
+ const hours=Number(standardHours)||0;return hours>0?100*Math.max(0,-Number(adjustment||0))/hours:0;
+}
 export function discretionaryLedger(st,grade){
  const p=st.hourPlans.find(x=>Number(x.grade)===Number(grade));
  const reductions=(p?.subjects||[]).reduce((a,x)=>a+Math.max(0,-Number(x.adjustment||0)),0);
@@ -207,7 +216,11 @@ export function validateState(st,calendarStats){
   const classIds=new Set(st.resources.classes.map(x=>x.id)),teacherIds=new Set(st.resources.teachers.map(x=>x.id)),facilityIds=new Set(st.resources.facilities.map(x=>x.id));for(const l of st.lessons){if(!l.classIds?.length)push('ERROR','LESSON-NOCLASS',`${l.name||l.subject}の学級未設定`,'授業には少なくとも1学級が必要です。');for(const id of l.classIds||[])if(!classIds.has(id))push('ERROR','LESSON-BADCLASS',`${l.name||l.subject}の学級参照エラー`,id);if(!l.allowTeacherTBD&&!(l.teacherIds||[]).filter(Boolean).length)push('WARNING','LESSON-NOTEACHER',`${l.name||l.subject}の担当未定`,'仮配置を許可するか、担当教員を設定してください。');for(const id of(l.teacherIds||[]).filter(Boolean))if(!teacherIds.has(id))push('ERROR','LESSON-BADTEACHER',`${l.name||l.subject}の教員参照エラー`,id);if(l.facilityId&&!facilityIds.has(l.facilityId))push('ERROR','LESSON-BADFACILITY',`${l.name||l.subject}の施設参照エラー`,l.facilityId)}
   for(const p of st.hourPlans){const sum=(p.subjects||[]).reduce((a,s)=>a+Number(s.hours||0),0);if(Number(p.annualTarget||0)!==sum)push('WARNING','HOURS-TOTAL',`${p.grade}年の年間標準時数と内訳が不一致`,`目標${p.annualTarget}、教科等の合計${sum}です。`)}
   if(calendarStats?.instructionDays){for(const l of st.lessons){const bs=Math.max(1,Number(l.blockSize||1));if(bs>1){const req=cycleSessionsForLesson(st,l,calendarStats.instructionDays);if(req%bs!==0)push('WARNING','LESSON-BLOCK-REMAINDER',`${l.subject}の連続コマ設定を確認`,`サイクル必要${req}コマに対し${bs}コマ連続設定のため、最後に${req%bs}コマの端数が生じます。サイクル週数や年間時数を確認してください。`)}}}
-  for(const hp of st.hourPlans){for(const subj of hp.subjects||[])if(Number(subj.hours||0)+Number(subj.adjustment||0)<0)push('ERROR','HOURS-NEGATIVE',`${hp.grade}年 ${subj.name}の調整後時数がマイナス`,'減少時数を見直してください。')}
+  for(const hp of st.hourPlans){for(const subj of hp.subjects||[]){
+   if(Number(subj.hours||0)+Number(subj.adjustment||0)<0)push('ERROR','HOURS-NEGATIVE',`${hp.grade}年 ${subj.name}の調整後時数がマイナス`,'減少時数を見直してください。');
+   const amount=Math.max(0,-Number(subj.adjustment||0)),maximum=maxSubjectReduction(subj.hours);
+   if(amount>maximum)push('ERROR','HOURS-REDUCTION-OVER-15',`${hp.grade}年 ${subj.name}の減少上限超過`,`基準${subj.hours}コマに対し${amount}コマ（${subjectReductionPercent(subj.hours,subj.adjustment).toFixed(1)}％）減少。15％・35コマ下限を踏まえた上限は${maximum}コマです。`);
+  }}
   for(const hp of st.hourPlans){const ledger=discretionaryLedger(st,hp.grade);if(ledger.remaining<0)push('ERROR','ADJUSTMENT-OVERSPENT',`${hp.grade}年の裁量時数が不足`,`${-ledger.remaining}時間超過しています。`);else if(ledger.remaining>0&&ledger.reductions>0)push('WARNING','ADJUSTMENT-UNALLOCATED',`${hp.grade}年に未配分の裁量時数`,`${ledger.remaining}時間が未配分です。`)}
   const std=standardUnitMinutesForSchool(st.school.type),actual=Number(st.school.lessonMinutes||std);if(actual!==std)push('INFO','UNIT-CONVERSION','授業時間を換算して時間割を編成',`${st.school.type==='elementary'?'小学校':'中学校'}の標準1単位時間${std}分に対し、実施1コマ${actual}分で換算します。`);
   const seen=new Set();for(const p of st.timetable.placements||[]){if(seen.has(p.id))push('ERROR','TT-DUPID','時間割データID重複',p.id);seen.add(p.id)}return issues;
