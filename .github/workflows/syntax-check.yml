@@ -21,3 +21,6 @@ jobs:
           done
       - name: Regression tests
         run: node tests/regression.mjs
+
+      - name: Startup smoke test
+        run: node tests/startup-smoke.mjs
