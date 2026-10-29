@@ -50,7 +50,7 @@ model.placements=[make('p1',0,'block1'),make('p2',2,'block1')];
 self.onmessage({data:{id:2,action:'metrics',model}});
 assert(out.at(-1).result.hard.some(x=>x.type==='broken-block'),'split 2-period block must be rejected');
 const blockModel=buildSolverModel(defaultState());
-blockModel.lessons=[{...blockModel.lessons[0],sessionsCycle:2,blockSize:2}];
+blockModel.lessons=[{...blockModel.lessons[0],teacherIds:[],allowTeacherTBD:true,sessionsCycle:2,blockSize:2}];
 blockModel.placements=[];
 self.onmessage({data:{id:3,action:'place',model:blockModel,lessonId:blockModel.lessons[0].id,target:{week:0,day:0,period:0}}});
 const placed=out.at(-1);assert(placed.ok,placed.error);
