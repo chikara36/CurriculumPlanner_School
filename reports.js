@@ -1,21 +1,21 @@
 import {calendarStats,monthMatrix,weeklyTargetForGrade,dailyPattern} from './calendar.js';
-import {classById,teacherById,facilityById,lessonById,DAYS,cycleSessionsForLesson,discretionaryLedger,effectiveSubjectHours,effectiveInstructionHours} from './model.js';
+import {classById,teacherById,facilityById,lessonById,DAYS,cycleSessionsForLesson,discretionaryLedger,discretionaryCaps,effectiveSubjectHours,effectiveInstructionHours} from './model.js';
 function esc(s){return String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
 function fmtDate(s){if(!s)return '';const [y,m,d]=s.split('-');return `${Number(y)}年${Number(m)}月${Number(d)}日`}
 function fiscalMonths(fy){const a=[];for(let i=0;i<12;i++){const m=(3+i)%12,y=fy+(m<3?1:0);a.push([y,m])}return a}
 export function summaryReport(state){
-  const stats=calendarStats(state),issues=[];const rows=state.hourPlans.map(p=>{const sum=p.subjects.reduce((a,s)=>a+Number(s.hours||0),0);return `<tr><td>${p.grade}年</td><td>${p.annualTarget}</td><td>${sum}</td><td>${weeklyTargetForGrade(state,p.grade,stats).avg.toFixed(2)}</td></tr>`}).join('');
+  const stats=calendarStats(state),issues=[];const rows=state.hourPlans.map(p=>{const sum=p.subjects.reduce((a,s)=>a+Number(s.hours||0),0);const adjusted=effectiveInstructionHours(state,p.grade);return `<tr><td>${p.grade}年</td><td>${p.annualTarget}</td><td>${sum}</td><td>${adjusted}</td><td>${weeklyTargetForGrade(state,p.grade,stats).avg.toFixed(2)}</td></tr>`}).join('');
   return wrap(state,'教育課程編成概要',`<div class="report-meta"><span>${esc(state.school.name)}</span><span>${state.school.fiscalYear}年度</span></div>
   <h3>1 学校教育目標</h3><p>${esc(state.goals.educationGoal||'未入力')}</p>
   <h3>2 指導の重点</h3>${state.goals.focusItems.map(x=>`<p><strong>${esc(x.label)}</strong>　${esc(x.text||'')}</p>`).join('')}
   <h3>3 年間授業日数</h3><p>${stats.instructionDays}日（週換算 ${stats.weeks.toFixed(1)}週）</p>
-  <h3>4 年間計画時数</h3><table class="report-table"><tr><th>学年</th><th>年間計画</th><th>内訳合計</th><th>週平均</th></tr>${rows}</table>`)
+  <h3>4 年間計画時数</h3><table class="report-table"><tr><th>学年</th><th>標準年間時数</th><th>標準内訳合計</th><th>調整後生徒時数</th><th>週平均</th></tr>${rows}</table>`)
 }
 export function hoursReport(state){
  const stats=calendarStats(state);let html='';
  for(const p of state.hourPlans){
-  const ledger=discretionaryLedger(state,p.grade);
-  html+=`<h3>${p.grade}年｜調整授業時数・裁量の時間</h3><p>減じた時数 ${ledger.reductions}時間 / 再配分 ${ledger.allocated+ledger.legacyAdds}時間 / 残り ${ledger.remaining}時間</p>
+  const ledger=discretionaryLedger(state,p.grade),caps=discretionaryCaps(state,p.grade);
+  html+=`<h3>${p.grade}年｜調整授業時数・裁量の時間</h3><p>減じた時数 ${ledger.reductions}時間 / 再配分 ${ledger.allocated+ledger.legacyAdds}時間 / 残り ${ledger.remaining}時間 / 裁量的な時間 ${caps.total}/70（研究・研修等 ${caps.training}/35）</p>
   <table class="report-table"><tr><th>教科等</th><th>基準</th><th>減少・旧調整</th><th>裁量から上乗せ</th><th>最終配当</th></tr>
   ${p.subjects.map(x=>{const allocated=ledger.allocations.filter(a=>a.subject===x.name&&a.kind!=='training').reduce((sum,a)=>sum+Number(a.hours||0),0);return `<tr><td>${esc(x.name)}</td><td>${Number(x.hours||0)}</td><td>${Number(x.adjustment||0)}</td><td>${allocated}</td><td>${effectiveSubjectHours(state,p.grade,x.name)}</td></tr>`}).join('')}
   </table><h4>裁量の時間の配分先</h4><table class="report-table"><tr><th>使途</th><th>教科・枠</th><th>年間時数</th><th>内容</th></tr>
