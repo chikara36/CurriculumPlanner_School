@@ -62,5 +62,5 @@ self.onmessage({data:{id:4,action:'move',model:blockModel,placementId:blockModel
 const moved=out.at(-1);assert(moved.ok,moved.error);
 assert(moved.result.ok,JSON.stringify(moved.result.conflicts||[]));
 assert(moved.result.placements.every(p=>p.day===1),'block move must preserve both periods');
-assert.deepEqual(moved.result.placements.map(p=>p.period).sort(),[0,1]);
+assert.deepEqual(Array.from(moved.result.placements,p=>p.period).sort(),[0,1]);
 console.log('Curriculum, policy caps, consecutive blocks and worker consistency tests passed');
