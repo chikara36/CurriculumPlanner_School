@@ -1,4 +1,4 @@
-import {APP_VERSION,SCHEMA_VERSION,defaultState,migrateState,deepClone,uid,DAYS,classById,teacherById,facilityById,lessonById,cycleSessionsForLesson,validateState,normalizeResources,applySchoolTypeDefaults,standardUnitMinutesForSchool,implementationPeriodsForStandardUnits,implementationExactPeriods,discretionaryLedger,effectiveSubjectHours,maxSubjectReduction,subjectReductionPercent} from './model.js';
+import {APP_VERSION,SCHEMA_VERSION,defaultState,migrateState,deepClone,uid,DAYS,classById,teacherById,facilityById,lessonById,cycleSessionsForLesson,validateState,normalizeResources,applySchoolTypeDefaults,standardUnitMinutesForSchool,implementationPeriodsForStandardUnits,implementationExactPeriods,discretionaryLedger,discretionaryCaps,effectiveSubjectHours,maxSubjectReduction,subjectReductionPercent,reconcileCurriculumLessons} from './model.js';
 import {loadState,saveState,downloadText,readFile} from './storage.js';
 import {calendarStats,weeklyTargetForGrade,dailyPattern,gradePatterns,monthMatrix,typeLabel,isoDate} from './calendar.js';
 import {solveSchedule,scheduleMetrics,movePlacement,placeLesson,absenceProposals,buildSolverModel} from './solver-client.js';
@@ -10,7 +10,7 @@ const NAV=[
   ['hours','05','授業時数'],['integrated','06','総合・特別活動'],['periods','07','校時表'],['resources','08','時間割データ'],
   ['timetable','09','時間割編成'],['operations','10','臨時変更・欠勤'],['checks','11','最終チェック'],['reports','12','帳票・保存']
 ];
-let state=null,saveTimer=null,busy=false,metricsCache=null,absenceCache=null,deferredPrompt=null;
+let state=null,saveTimer=null,busy=false,metricsCache=null,absenceCache=null,deferredPrompt=null,mutationRevision=0;
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 const attr=s=>esc(s).replace(/`/g,'&#96;');
@@ -40,13 +40,13 @@ function bindGlobal(){
   document.body.addEventListener('click',handleClick);document.body.addEventListener('input',handleBind);document.body.addEventListener('change',handleChange);
   document.body.addEventListener('dragstart',handleDragStart);document.body.addEventListener('dragover',e=>{if(e.target.closest('[data-drop]')){e.preventDefault();e.target.closest('[data-drop]').classList.add('drop-target')}});document.body.addEventListener('dragleave',e=>e.target.closest('[data-drop]')?.classList.remove('drop-target'));document.body.addEventListener('drop',handleDrop);
 }
-function handleBind(e){const path=e.target.dataset.bind;if(!path)return;let v=e.target.type==='checkbox'?e.target.checked:e.target.value;if(e.target.dataset.number!==undefined)v=n(v);if(e.target.dataset.boolean!==undefined)v=String(v)==='true';setByPath(state,path,v);if(path==='goals.featureTagsText')state.goals.featureTags=String(v).split(/[、,]/).map(x=>x.trim()).filter(Boolean);const sm=path.match(/^resources\.teachers\.(\d+)\.subjectsText$/);if(sm)state.resources.teachers[Number(sm[1])].subjects=String(v).split(/[、,]/).map(x=>x.trim()).filter(Boolean);if(path==='timetable.cycleWeeks'){state.instruction.cycleWeeks=n(v,1);state.timetable.view.week=Math.min(state.timetable.view.week,n(v,1)-1)}state.updatedAt=new Date().toISOString();scheduleSave();if(e.target.dataset.live==='top')updateTop()}
-function scheduleSave(){clearTimeout(saveTimer);$('#saveChip').textContent='保存中…';saveTimer=setTimeout(async()=>{try{await saveState(state);$('#saveChip').textContent='端末に保存済み'}catch(e){$('#saveChip').textContent='保存失敗';toast(e.message,'err')}},450)}
+function handleBind(e){const path=e.target.dataset.bind;if(!path)return;if(path==='school.type'||/^resources\.classes\.\d+\.grade$/.test(path))return;let v=e.target.type==='checkbox'?e.target.checked:e.target.value;if(e.target.dataset.number!==undefined)v=n(v);if(e.target.dataset.boolean!==undefined)v=String(v)==='true';setByPath(state,path,v);if(path==='goals.featureTagsText')state.goals.featureTags=String(v).split(/[、,]/).map(x=>x.trim()).filter(Boolean);const sm=path.match(/^resources\.teachers\.(\d+)\.subjectsText$/);if(sm)state.resources.teachers[Number(sm[1])].subjects=String(v).split(/[、,]/).map(x=>x.trim()).filter(Boolean);if(path==='timetable.cycleWeeks'){state.instruction.cycleWeeks=n(v,1);state.timetable.view.week=Math.min(state.timetable.view.week,n(v,1)-1)}state.updatedAt=new Date().toISOString();scheduleSave();if(e.target.dataset.live==='top')updateTop()}
+function scheduleSave(){mutationRevision++;metricsCache=null;clearTimeout(saveTimer);$('#saveChip').textContent='保存中…';saveTimer=setTimeout(async()=>{try{await saveState(state);$('#saveChip').textContent='端末に保存済み'}catch(e){$('#saveChip').textContent='保存失敗';toast(e.message,'err')}},450)}
 function render(){renderNav();updateTop();const c=$('#content');const fn={basic:renderBasic,goals:renderGoals,calendar:renderCalendar,days:renderDays,hours:renderHours,integrated:renderIntegrated,periods:renderPeriods,resources:renderResources,timetable:renderTimetable,operations:renderOperations,checks:renderChecks,reports:renderReports}[state.ui.page]||renderBasic;c.innerHTML=fn();afterRender()}
 function renderNav(){$('#nav').innerHTML=`<div class="nav-title">学校で作成</div>`+NAV.map(([id,num,label])=>`<div class="nav-item ${state.ui.page===id?'active':''}" data-nav="${id}"><span class="num">${num}</span><span class="label">${label}</span><span class="state ${navState(id)}">●</span></div>`).join('')}
 function updateTop(){$('#topSchool').textContent=state.school.name||'学校未設定';$('#topMeta').textContent=`${state.school.fiscalYear}年度｜School v${APP_VERSION}`;const ch=$('#onlineChip');ch.className=`chip ${navigator.onLine?'ok':'warn'}`;ch.textContent=navigator.onLine?'● オンライン / オフライン対応':'● オフラインで作業中'}
 function afterRender(){if(state.ui.page==='reports')renderReportPreview();}
-async function refreshMetrics(){try{metricsCache=await scheduleMetrics(state);if(state.ui.page==='timetable'||state.ui.page==='checks')render();else renderNav()}catch(e){console.warn(e)}}
+async function refreshMetrics(){const revision=mutationRevision;try{const next=await scheduleMetrics(state);if(revision!==mutationRevision)return;metricsCache=next;if(state.ui.page==='timetable'||state.ui.page==='checks')render();else renderNav()}catch(e){console.warn(e)}}
 function pushUndo(){state.timetable.undo=state.timetable.undo||[];state.timetable.undo.push(deepClone(state.timetable.placements));if(state.timetable.undo.length>30)state.timetable.undo.shift();state.timetable.redo=[]}
 function applyPlacements(ps){pushUndo();state.timetable.placements=ps;state.updatedAt=new Date().toISOString();scheduleSave();refreshMetrics();render()}
 
@@ -98,16 +98,8 @@ function renderDays(){
   ${card('学年別の自動計算',`<div class="table-wrap"><table class="table"><thead><tr><th>学年</th><th>標準年間時数</th><th>実施必要コマ</th><th>週平均</th><th>基準週</th><th>サイクル別</th><th>曜日配当</th></tr></thead><tbody>${state.hourPlans.map(p=>{const w=weeklyTargetForGrade(state,p.grade,stats);return `<tr><td>${p.grade}年</td><td class="num">${w.standardAnnual}</td><td class="num"><strong>${w.annual}</strong></td><td class="num">${w.avg.toFixed(2)}</td><td class="num"><strong>${w.base}</strong></td><td>${w.targets.map((x,i)=>`${i+1}週:${x}`).join(' / ')}</td><td>${(patterns[p.grade]?.[0]||[]).map((x,i)=>`${DAYS[i]}${x}`).join('・')}</td></tr>`}).join('')}</tbody></table></div><div class="notice info" style="margin-top:10px">生徒の時間割は中抜けを作らず、例えば5コマの日は1〜5限に授業を入れ、6限を空きにします。</div>`)} `;
 }
 
-function syncSubjectLessons(grade,subject){
-  const plan=state.hourPlans.find(x=>Number(x.grade)===Number(grade));const sp=plan?.subjects.find(x=>x.name===subject);if(!plan)return;if(!sp)plan.subjects.push({id:uid('sub'),name:subject,hours:0,adjustment:0});
-  const adjusted=effectiveSubjectHours(state,grade,subject);
-  for(const c of state.resources.classes.filter(x=>Number(x.grade)===Number(grade))){
-    const existing=state.lessons.find(l=>l.subject===subject&&(l.classIds||[]).length===1&&l.classIds[0]===c.id);
-    if(existing){existing.annualHours=adjusted;continue}
-    if(adjusted<=0)continue;
-    state.lessons.push({id:uid('l'),name:subject,subject,classIds:[c.id],teacherIds:[],facilityId:'normal',annualHours:adjusted,cycleSessionsOverride:null,blockSize:1,type:'normal',syncGroup:'',allowTeacherTBD:true,allowFacilityTBD:false,unavailable:[],preferred:[]});
-  }
-}
+function syncSubjectLessons(grade,subject){return reconcileCurriculumLessons(state,grade);}
+
 function updateHourAdjustment(pi,si,value){
   const hp=state.hourPlans[pi],subj=hp?.subjects?.[si];if(!subj)return;
   const minimum=-maxSubjectReduction(subj.hours),requested=Math.round(n(value));
@@ -120,9 +112,9 @@ function renderHours(){
  const stats=calendarStats(state);
  return pageHead('05 裁量時数・配当','①教科時数を減ずる → ②裁量の時間として確保 → ③学習・教科上乗せ・新設教科・研修へ配分 → ④時間割へ反映します。')+
  `<div class="notice info" style="margin-bottom:12px">本画面は制度検討・学校計画のための配当支援です。各教科の減少は基準時数の最大15％（整数コマは切り捨て）かつ減少後35コマ以上で制限します。制度上の他の要件、対象教科、研修枠への充当条件は別途確認が必要です。研修枠は生徒の授業時数に加算しません。</div>
- <div class="grid">${state.hourPlans.map((p,pi)=>{const w=weeklyTargetForGrade(state,p.grade,stats),ledger=discretionaryLedger(state,p.grade),base=p.subjects.reduce((a,x)=>a+n(x.hours),0);
+ <div class="grid">${state.hourPlans.map((p,pi)=>{const w=weeklyTargetForGrade(state,p.grade,stats),ledger=discretionaryLedger(state,p.grade),caps=discretionaryCaps(state,p.grade),base=p.subjects.reduce((a,x)=>a+n(x.hours),0);
  return card(`${p.grade}年｜裁量時間の収支`,`
- <div class="inline" style="margin-bottom:10px"><span class="chip info">減じた時数 ${ledger.reductions}時間</span><span class="chip neutral">配分済 ${ledger.allocated+ledger.legacyAdds}時間</span><span class="chip ${ledger.remaining<0?'err':ledger.remaining>0?'warn':'ok'}">残り ${ledger.remaining}時間</span><span class="chip neutral">生徒の年間 ${w.standardAnnual}単位 / 週平均 ${w.avg.toFixed(2)}コマ</span></div>
+ <div class="inline" style="margin-bottom:10px"><span class="chip info">減じた時数 ${ledger.reductions}時間</span><span class="chip neutral">配分済 ${ledger.allocated+ledger.legacyAdds}時間</span><span class="chip ${ledger.remaining<0?'err':ledger.remaining>0?'warn':'ok'}">残り ${ledger.remaining}時間</span><span class="chip neutral">生徒の年間 ${w.standardAnnual}単位 / 週平均 ${w.avg.toFixed(2)}コマ</span><span class="chip ${caps.total>70||caps.training>35?'err':'ok'}">裁量的な時間 ${caps.total}/70 ・研修 ${caps.training}/35</span></div>
  <h4>① 各教科から減ずる時数</h4>
  <div class="table-wrap hours-table-wrap"><table class="table hours-adjust-table"><colgroup><col style="width:23%"><col style="width:10%"><col style="width:29%"><col style="width:13%"><col style="width:13%"><col style="width:12%"></colgroup><thead><tr><th>教科等</th><th>基準</th><th>減ずる時数</th><th>減少量</th><th>減少率</th><th>調整後</th></tr></thead><tbody>${p.subjects.filter(x=>n(x.hours)>0).map(x=>{const si=p.subjects.indexOf(x),v=Math.min(0,n(x.adjustment)),hours=n(x.hours),limit=maxSubjectReduction(hours),percent=subjectReductionPercent(hours,v),over=-v>limit;return `<tr><td>${esc(x.name)}</td><td class="num">${hours}</td><td class="hours-slider-cell"><input type="range" min="-${limit}" max="0" step="1" value="${Math.max(-limit,v)}" data-hours-adjust="${pi}-${si}" aria-label="${attr(x.name)}から減ずる時数（上限15％）" ${limit===0?'disabled':''}><div class="help">最大 ${limit}コマ（15％以内）</div></td><td class="hours-input-cell"><input type="number" min="-${limit}" max="0" value="${v}" data-hours-number="${pi}-${si}" ${limit===0?'disabled':''}></td><td class="num hours-percent-cell"><strong>${percent.toFixed(1)}％</strong>${over?'<span class="hours-overlimit" title="15％上限超過">!</span>':''}</td><td class="num">${hours+v}</td></tr>`}).join('')}</tbody></table></div>
  <h4 style="margin-top:14px">② 裁量の時間を配分する</h4>
@@ -232,7 +224,7 @@ function renderReports(){
 }
 function renderReportPreview(){const el=$('#reportPreview');if(!el)return;const type=state.ui.reportType||'summary';let opts={};if(type==='timetable')opts={kind:state.timetable.view.kind,id:state.timetable.view.id};el.innerHTML=reportByType(state,type,opts)}
 
-function openModal(title,body,buttons=''){const root=$('#modalRoot');root.innerHTML=`<div class="modal-backdrop" data-action="closeModal"><div class="modal" onclick="event.stopPropagation()"><div class="modal-head"><h3>${esc(title)}</h3><button class="btn icon" data-action="closeModal">×</button></div><div class="modal-body">${body}</div>${buttons?`<div class="modal-foot">${buttons}</div>`:''}</div></div>`}
+function openModal(title,body,buttons=''){const root=$('#modalRoot');root.innerHTML=`<div class="modal-backdrop" data-action="closeModal"><div class="modal"><div class="modal-head"><h3>${esc(title)}</h3><button class="btn icon" data-action="closeModal">×</button></div><div class="modal-body">${body}</div>${buttons?`<div class="modal-foot">${buttons}</div>`:''}</div></div>`}
 function closeModal(){$('#modalRoot').innerHTML=''}
 function selectedValues(name){return $$(`[name="${name}"]:checked`).map(x=>x.value)}
 function gridUnavailable(values=[],prefix='u'){const max=Math.min(state.periods.length,state.instruction.maxPeriods);return `<div class="table-wrap"><table class="table"><thead><tr><th>時限</th>${DAYS.map(d=>`<th>${d}</th>`).join('')}</tr></thead><tbody>${Array.from({length:max},(_,p)=>`<tr><th>${p+1}限</th>${DAYS.map((d,day)=>{const k=`${day}-${p}`;return `<td class="center"><input type="checkbox" name="${prefix}" value="${k}" ${values.includes(k)?'checked':''}></td>`}).join('')}</tr>`).join('')}</tbody></table></div>`}
@@ -241,7 +233,7 @@ async function handleClick(e){
   const nav=e.target.closest('[data-nav]');if(nav){state.ui.page=nav.dataset.nav;scheduleSave();render();return}
   const b=e.target.closest('[data-action]');if(!b)return;const a=b.dataset.action;
   try{
-    if(a==='closeModal'){closeModal();return}
+    if(a==='closeModal'){if(b.classList.contains('modal-backdrop')&&e.target!==b)return;closeModal();return}
     if(a==='openDrive'){showDriveModal();return}
     if(a==='exportJson'){const name=`${(state.school.name||'school').replace(/\s/g,'_')}_${state.school.fiscalYear}_curriculum.json`;downloadText(name,JSON.stringify(state,null,2));toast('JSONバックアップを保存しました','ok');return}
     if(a==='importJson'){importJsonDialog();return}
@@ -257,7 +249,7 @@ async function handleClick(e){
     if(a==='addPeriod'){state.periods.push({id:uid('p'),name:`${state.periods.length+1}限`,start:'',end:''});state.instruction.maxPeriods=Math.min(state.periods.length,7);scheduleSave();render();return}
     if(a==='removePeriod'){if(state.periods.length<=1)return toast('時限は1つ以上必要です','warn');state.periods.splice(Number(b.dataset.index),1);state.instruction.maxPeriods=Math.min(state.instruction.maxPeriods,state.periods.length);scheduleSave();render();return}
     if(a==='resourceTab'){state.ui.resourceTab=b.dataset.tab;scheduleSave();render();return}
-    if(a==='addClass'){state.resources.classes.push({id:uid('c'),grade:1,name:'新規学級'});scheduleSave();render();return}
+    if(a==='addClass'){const grade=state.hourPlans[0]?.grade||1;const others=state.resources.classes.filter(c=>Number(c.grade)===Number(grade)).length;const c={id:uid('c'),grade,name:`${grade}年${others+1}組`};state.resources.classes.push(c);const result=reconcileCurriculumLessons(state,grade);state.timetable.lastResult=null;scheduleSave();render();refreshMetrics();toast(`${c.name}を追加し、${result.created}件の授業を作成しました。担当教員を設定してください`,'ok');return}
     if(a==='removeClass'){const id=b.dataset.id;if(state.lessons.some(l=>l.classIds?.includes(id)))return toast('授業設定で使用中の学級は削除できません','warn');state.resources.classes=state.resources.classes.filter(x=>x.id!==id);scheduleSave();render();return}
     if(a==='addTeacher'){state.resources.teachers.push({id:uid('t'),name:'新規教員',role:'',roles:[],subjects:[],unavailable:[],leaves:[],maxDaily:5,maxConsecutive:3,consecutiveHard:false,substituteEligible:true,breakRule:{enabled:false,startPeriod:3,endPeriod:4,minFreeSlots:1,hard:false}});scheduleSave();render();return}
     if(a==='removeTeacher'){const id=b.dataset.id;if(state.lessons.some(l=>l.teacherIds?.includes(id)))return toast('授業設定で使用中の教員は削除できません','warn');state.resources.teachers=state.resources.teachers.filter(x=>x.id!==id);scheduleSave();render();return}
@@ -268,6 +260,9 @@ async function handleClick(e){
       const grade=Number(b.dataset.grade),kind=$('#allocKind_'+grade)?.value,hours=Math.round(n($('#allocHours_'+grade)?.value)),note=$('#allocNote_'+grade)?.value.trim()||'',ledger=discretionaryLedger(state,grade);
       if(!(hours>0))return toast('配分時数を1時間以上で指定してください','warn');
       if(hours>ledger.remaining)return toast(`裁量時間の残高は${ledger.remaining}時間です。超過配分できません`,'warn');
+      const caps=discretionaryCaps(state,grade);
+      if(kind==='learning'&&caps.total+hours>70)return toast('学習枠・研修枠の合計は70コマまでです','warn');
+      if(kind==='training'&&(caps.total+hours>70||caps.training+hours>35))return toast('裁量的な時間は合計70コマ、研究・研修等枠は35コマまでです','warn');
       let subject='';
       if(kind==='subject')subject=$('#allocSubject_'+grade)?.value||'';
       if(kind==='new_subject'){subject=$('#allocNewSubject_'+grade)?.value.trim();if(!subject)return toast('新設教科名を入力してください','warn')}
@@ -321,10 +316,27 @@ function handleChange(e){
   const path=e.target.dataset.bind;
   if(e.target.dataset.hoursAdjust){const [pi,si]=e.target.dataset.hoursAdjust.split('-').map(Number);updateHourAdjustment(pi,si,e.target.value);return}
   if(e.target.dataset.hoursNumber){const [pi,si]=e.target.dataset.hoursNumber.split('-').map(Number);updateHourAdjustment(pi,si,e.target.value);return}
+  const gradeChange=path?.match(/^resources\.classes\.(\d+)\.grade$/);
+  if(gradeChange){
+    const index=Number(gradeChange[1]),cls=state.resources.classes[index],next=Math.round(Number(e.target.value)),old=Number(cls?.grade),max=state.school.type==='elementary'?6:3;
+    if(!cls)return;
+    if(!Number.isInteger(next)||next<1||next>max){toast('学年が校種の範囲外です','warn');e.target.value=old;return}
+    if(next===old)return;
+    if(!confirm('学年を変更すると、この学級の授業定義と配置を解除して新学年の授業を生成します。JSONバックアップを保存してから実施してください。続けますか？')){e.target.value=old;return}
+    const affected=state.lessons.filter(l=>(l.classIds||[]).includes(cls.id));
+    const removedIds=new Set(affected.filter(l=>l.classIds.length===1).map(l=>l.id));
+    for(const l of affected)if(l.classIds.length>1)l.classIds=l.classIds.filter(id=>id!==cls.id);
+    state.lessons=state.lessons.filter(l=>!removedIds.has(l.id));
+    state.timetable.placements=state.timetable.placements.filter(p=>!removedIds.has(p.lessonId));
+    cls.grade=next;
+    const result=reconcileCurriculumLessons(state,next);
+    state.timetable.undo=[];state.timetable.redo=[];state.timetable.lastResult=null;
+    scheduleSave();render();refreshMetrics();toast(`${result.created}件の新学年授業を追加しました`,'ok');return;
+  }
   if(path==='school.type'){
     const next=e.target.value;
     if(!confirm('校種を変更すると、既存の教員・授業・時間割・学校独自マスタが初期化されます。先にJSONバックアップを保存してください。変更しますか？')){e.target.value=state.school.type;return}
-    applySchoolTypeDefaults(state,next);
+    applySchoolTypeDefaults(state,next);state.adjusted.allocations=[];
     metricsCache=null;absenceCache=null;
     scheduleSave();render();refreshMetrics();
     toast(next==='elementary'?'小学校の教科・標準時数・45分基準へ切り替えました':'中学校の教科・標準時数・50分基準へ切り替えました','ok');
@@ -341,7 +353,12 @@ function handleChange(e){
 function handleDragStart(e){const l=e.target.closest('[data-drag-lesson]'),p=e.target.closest('[data-drag-placement]');if(l)e.dataTransfer.setData('application/json',JSON.stringify({type:'lesson',id:l.dataset.dragLesson}));if(p)e.dataTransfer.setData('application/json',JSON.stringify({type:'placement',id:p.dataset.dragPlacement}))}
 async function handleDrop(e){const cell=e.target.closest('[data-drop]');if(!cell)return;e.preventDefault();cell.classList.remove('drop-target');let data;try{data=JSON.parse(e.dataTransfer.getData('application/json'))}catch{return}const target={week:Number(cell.dataset.week),day:Number(cell.dataset.day),period:Number(cell.dataset.period)};busy=true;try{if(data.type==='lesson'){const r=await placeLesson(state,data.id,target);if(!r.ok)return toast((r.conflicts||[]).map(x=>x.text).join(' / '),'warn');applyPlacements(r.placements)}else if(data.type==='placement'){const r=await movePlacement(state,data.id,target);if(!r.ok)return toast((r.conflicts||[]).map(x=>x.text).join(' / '),'warn');applyPlacements(r.placements)}}finally{busy=false}}
 
-async function runAutoSchedule(mode){busy=true;render();try{const r=await solveSchedule(state,mode);pushUndo();state.timetable.placements=r.placements;metricsCache=r.metrics;state.timetable.lastResult={at:new Date().toISOString(),mode,metrics:r.metrics};state.updatedAt=new Date().toISOString();scheduleSave();toast(r.metrics.unplaced?`編成しました。未配置 ${r.metrics.unplaced}駒`:'時間割を編成しました','ok')}finally{busy=false;render()}}
+async function runAutoSchedule(mode){
+ if(busy)return;
+ const problems=validateState(state,calendarStats(state)).filter(x=>x.level==='ERROR');
+ if(problems.length){state.ui.page='checks';scheduleSave();render();toast(`入力・時数のエラーが${problems.length}件あります。STEP11で確認してください`,'warn');return}
+ const startedRevision=mutationRevision;busy=true;render();
+ try{const r=await solveSchedule(state,mode);if(startedRevision!==mutationRevision){toast('編成中に設定が変更されたため古い結果を破棄しました','warn');return}pushUndo();state.timetable.placements=r.placements;metricsCache=r.metrics;state.timetable.lastResult={at:new Date().toISOString(),mode,metrics:r.metrics};state.updatedAt=new Date().toISOString();scheduleSave();toast(r.metrics.unplaced?`編成しました。未配置 ${r.metrics.unplaced}駒`:'時間割を編成しました','ok')}finally{busy=false;render()}}
 function undoSchedule(){const u=state.timetable.undo||[];if(!u.length)return;state.timetable.redo=state.timetable.redo||[];state.timetable.redo.push(deepClone(state.timetable.placements));state.timetable.placements=u.pop();state.timetable.selectedPlacementId=null;scheduleSave();refreshMetrics();render()}
 function redoSchedule(){const r=state.timetable.redo||[];if(!r.length)return;state.timetable.undo=state.timetable.undo||[];state.timetable.undo.push(deepClone(state.timetable.placements));state.timetable.placements=r.pop();state.timetable.selectedPlacementId=null;scheduleSave();refreshMetrics();render()}
 function removePlacementGroup(id){const p=state.timetable.placements.find(x=>x.id===id);if(!p)return;const l=lessonById(state,p.lessonId),group=p.blockId?state.timetable.placements.filter(x=>x.blockId===p.blockId):[p];if(group.some(x=>x.locked))return toast('固定を解除してから外してください','warn');pushUndo();if(p.blockId)state.timetable.placements=state.timetable.placements.filter(x=>x.blockId!==p.blockId);else if(l?.syncGroup){state.timetable.placements=state.timetable.placements.filter(x=>{const q=lessonById(state,x.lessonId);return !(q?.syncGroup===l.syncGroup&&x.week===p.week&&x.day===p.day&&x.period===p.period)})}else state.timetable.placements=state.timetable.placements.filter(x=>x.id!==id);state.timetable.selectedPlacementId=null;scheduleSave();refreshMetrics();render()}
