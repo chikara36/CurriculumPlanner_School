@@ -35,7 +35,7 @@ try{
  assert.equal(await page.locator('.modal-backdrop').count(),0,'modal Save must close the modal');
  await page.locator('[data-action="resourceTab"][data-tab="classes"]').click();
  await page.locator('[data-action="addClass"]').click();
- assert((await page.locator('#content').innerText()).includes('1年3組'));
+ assert((await page.locator('#content input[value="1年3組"]').count())>0,'new class should be shown in the class input');
  await page.locator('[data-action="resourceTab"][data-tab="assignments"]').click();
  assert((await page.locator('#content').innerText()).includes('1年3組'),'new class must have generated assignments');
  await page.locator('[data-nav="hours"]').click();
@@ -55,7 +55,7 @@ try{
  await page.reload({waitUntil:'domcontentloaded'});
  await page.locator('[data-nav="resources"]').click();
  await page.locator('[data-action="resourceTab"][data-tab="classes"]').click();
- assert((await page.locator('#content').innerText()).includes('1年3組'),'class data should persist after reload');
+ assert((await page.locator('#content input[value="1年3組"]').count())>0,'class data should persist after reload');
  assert.deepEqual(errors,[],'browser errors: '+errors.join('; '));
  console.log('Real Chrome E2E passed: startup, teacher modal, class creation, fixed table, cancelled school switch, persistence.');
 }catch(err){
