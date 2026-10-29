@@ -38,6 +38,16 @@ try{
  assert((await page.locator('#content input[value="1年3組"]').count())>0,'new class should be shown in the class input');
  await page.locator('[data-action="resourceTab"][data-tab="assignments"]').click();
  assert((await page.locator('#content').innerText()).includes('1年3組'),'new class must have generated assignments');
+ await page.locator('[data-action="resourceTab"][data-tab="lessons"]').click();
+ await page.locator('[data-action="editLesson"]').first().click();
+ await page.locator('.modal-backdrop').waitFor();
+ await page.locator('[data-action="saveLesson"]').click();
+ assert.equal(await page.locator('.modal-backdrop').count(),0,'lesson details should save via delegated event');
+ await page.locator('[data-action="resourceTab"][data-tab="classes"]').click();
+ const gradeField=page.locator('input[data-bind^="resources.classes."][data-bind$=".grade"]').first();
+ page.once('dialog',dialog=>dialog.dismiss());
+ await gradeField.fill('2');await gradeField.press('Tab');
+ assert.equal(await gradeField.inputValue(),'1','cancelled grade switch must restore original grade');
  await page.locator('[data-nav="hours"]').click();
  const table=page.locator('.hours-adjust-table').first();
  const widthBefore=await table.evaluate(el=>el.getBoundingClientRect().width);
@@ -56,6 +66,10 @@ try{
  await page.locator('[data-nav="resources"]').click();
  await page.locator('[data-action="resourceTab"][data-tab="classes"]').click();
  assert((await page.locator('#content input[value="1年3組"]').count())>0,'class data should persist after reload');
+ await page.locator('[data-action="resourceTab"][data-tab="teachers"]').click();
+ await page.locator('[data-action="teacherMaster"]').first().click();
+ assert((await page.locator('input[name="teacherMasterRoles"]:checked').count())>=1,'saved roles must persist');
+ await page.locator('[data-action="closeModal"]').last().click();
  assert.deepEqual(errors,[],'browser errors: '+errors.join('; '));
  console.log('Real Chrome E2E passed: startup, teacher modal, class creation, fixed table, cancelled school switch, persistence.');
 }catch(err){
