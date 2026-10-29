@@ -1,5 +1,5 @@
-export const APP_VERSION='1.4.3';
-export const SCHEMA_VERSION=11;
+export const APP_VERSION='1.5.0';
+export const SCHEMA_VERSION=12;
 export const DAYS=['月','火','水','木','金'];
 
 export const DEFAULT_SUBJECTS_JHS=[
@@ -62,6 +62,38 @@ export function effectiveSubjectHours(st,grade,subject){
  const base=Math.max(0,Number(row?.hours||0)+Number(row?.adjustment||0));
  const adds=(st.adjusted?.allocations||[]).filter(x=>Number(x.grade)===Number(grade)&&x.kind!=='training'&&x.subject===subject).reduce((a,x)=>a+Math.max(0,Number(x.hours||0)),0);
  return Math.max(0,base+adds);
+}
+// School-defined discretionary time: learning + staff-development time together.
+export function discretionaryCaps(st,grade){
+ const a=(st.adjusted?.allocations||[]).filter(x=>Number(x.grade)===Number(grade));
+ const learning=a.filter(x=>x.kind==='learning').reduce((sum,x)=>sum+Math.max(0,Number(x.hours||0)),0);
+ const training=a.filter(x=>x.kind==='training').reduce((sum,x)=>sum+Math.max(0,Number(x.hours||0)),0);
+ return {learning,training,total:learning+training,maxTotal:70,maxTraining:35};
+}
+// Reconcile missing, ordinary per-class lessons without changing teacher assignments,
+// manual multi-class/team-teaching structures, or already placed timetable entries.
+export function reconcileCurriculumLessons(st,grade=null){
+ let created=0,updated=0;
+ for(const cls of st.resources.classes||[]){
+  if(grade!==null&&Number(cls.grade)!==Number(grade))continue;
+  const plan=(st.hourPlans||[]).find(p=>Number(p.grade)===Number(cls.grade));
+  if(!plan)continue;
+  const subjects=new Set((plan.subjects||[]).map(x=>x.name));
+  for(const a of st.adjusted?.allocations||[])if(Number(a.grade)===Number(cls.grade)&&a.kind!=='training'&&a.subject)subjects.add(a.subject);
+  for(const subject of subjects){
+   const hours=effectiveSubjectHours(st,cls.grade,subject);
+   const covering=(st.lessons||[]).filter(l=>l.subject===subject&&(l.classIds||[]).includes(cls.id));
+   if(covering.length){
+    const sole=covering.length===1?covering[0]:null;
+    if(sole&&sole.classIds.length===1&&sole.type==='normal'&&sole.autoManaged!==false&&Number(sole.annualHours)!==hours){sole.annualHours=hours;updated++}
+    continue;
+   }
+   if(hours<=0)continue;
+   st.lessons.push({id:uid('l'),name:subject,subject,classIds:[cls.id],teacherIds:[],facilityId:'normal',annualHours:hours,cycleSessionsOverride:null,blockSize:1,type:'normal',syncGroup:'',allowTeacherTBD:true,allowFacilityTBD:false,unavailable:[],preferred:[],autoManaged:true});
+   created++;
+  }
+ }
+ return {created,updated};
 }
 export function effectiveInstructionHours(st,grade){
  const p=st.hourPlans.find(x=>Number(x.grade)===Number(grade));
@@ -133,7 +165,7 @@ function defaultLessons(classes,teachers,hourPlans,type='junior_high'){
       if(type==='elementary'){
         if(['外国語','外国語活動'].includes(s.name))tid='tE';else if(s.name==='音楽')tid='tMu';else if(s.name==='体育')tid='tPE';else tid=`t_${c.id}`;
       }
-      out.push({id:`l_${c.id}_${s.id}`,name:s.name,subject:s.name,classIds:[c.id],teacherIds:[tid].filter(Boolean),facilityId:facility[s.name]||'normal',annualHours:s.hours,cycleSessionsOverride:null,blockSize:1,type:'normal',syncGroup:'',allowTeacherTBD:false,allowFacilityTBD:false,unavailable:[],preferred:[]});
+      out.push({id:`l_${c.id}_${s.id}`,name:s.name,subject:s.name,classIds:[c.id],teacherIds:[tid].filter(Boolean),facilityId:facility[s.name]||'normal',annualHours:s.hours,cycleSessionsOverride:null,blockSize:1,autoManaged:true,type:'normal',syncGroup:'',allowTeacherTBD:false,allowFacilityTBD:false,unavailable:[],preferred:[]});
     }
   }
   return out;
@@ -221,6 +253,17 @@ export function validateState(st,calendarStats){
    const amount=Math.max(0,-Number(subj.adjustment||0)),maximum=maxSubjectReduction(subj.hours);
    if(amount>maximum)push('ERROR','HOURS-REDUCTION-OVER-15',`${hp.grade}年 ${subj.name}の減少上限超過`,`基準${subj.hours}コマに対し${amount}コマ（${subjectReductionPercent(subj.hours,subj.adjustment).toFixed(1)}％）減少。15％・35コマ下限を踏まえた上限は${maximum}コマです。`);
   }}
+  for(const hp of st.hourPlans){const caps=discretionaryCaps(st,hp.grade);if(caps.total>caps.maxTotal)push('ERROR','DISCRETIONARY-70-OVER',`${hp.grade}年の裁量的な時間が70コマを超過`,`学習${caps.learning}＋研究・研修${caps.training}＝${caps.total}コマです。`);if(caps.training>caps.maxTraining)push('ERROR','TRAINING-35-OVER',`${hp.grade}年の研究・研修等枠が35コマを超過`,`現在${caps.training}コマです。`)}
+  for(const cls of st.resources.classes){
+   const hp=st.hourPlans.find(p=>Number(p.grade)===Number(cls.grade));
+   if(!hp){push('ERROR','CLASS-GRADE',`${cls.name}の学年が校種の範囲外`,'学年・校種を確認してください。');continue}
+   const subjects=new Set(hp.subjects.map(x=>x.name));
+   for(const a of st.adjusted?.allocations||[])if(Number(a.grade)===Number(cls.grade)&&a.kind!=='training'&&a.subject)subjects.add(a.subject);
+   for(const name of subjects){
+    if(effectiveSubjectHours(st,cls.grade,name)<=0)continue;
+    if(!st.lessons.some(l=>l.subject===name&&(l.classIds||[]).includes(cls.id)))push('ERROR','CURRICULUM-MISSING-LESSON',`${cls.name}の${name}に授業定義がありません`,'STEP08の学級別授業を作成してください。');
+   }
+  }
   for(const hp of st.hourPlans){const ledger=discretionaryLedger(st,hp.grade);if(ledger.remaining<0)push('ERROR','ADJUSTMENT-OVERSPENT',`${hp.grade}年の裁量時数が不足`,`${-ledger.remaining}時間超過しています。`);else if(ledger.remaining>0&&ledger.reductions>0)push('WARNING','ADJUSTMENT-UNALLOCATED',`${hp.grade}年に未配分の裁量時数`,`${ledger.remaining}時間が未配分です。`)}
   const std=standardUnitMinutesForSchool(st.school.type),actual=Number(st.school.lessonMinutes||std);if(actual!==std)push('INFO','UNIT-CONVERSION','授業時間を換算して時間割を編成',`${st.school.type==='elementary'?'小学校':'中学校'}の標準1単位時間${std}分に対し、実施1コマ${actual}分で換算します。`);
   const seen=new Set();for(const p of st.timetable.placements||[]){if(seen.has(p.id))push('ERROR','TT-DUPID','時間割データID重複',p.id);seen.add(p.id)}return issues;
