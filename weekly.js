@@ -49,5 +49,5 @@ export function weeklyTemporarySchedules(plan){
 export function weeklyConditionsMatch(state,plan){
  if(!plan)return false;
  const sig=x=>JSON.stringify((x||[]).map(a=>[a.teacherId,a.date,a.segment,Number(a.week)]).sort((a,b)=>JSON.stringify(a).localeCompare(JSON.stringify(b))));
- return sig(plan.absences)===sig(registeredConditions(state,plan.weekStart));
+ return sig(plan.absences)===sig(registeredConditions(state,plan.weekStart))&&(!plan.periodSignature||plan.periodSignature===JSON.stringify(state.periodAssignments||[]));
 }
