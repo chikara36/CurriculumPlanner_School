@@ -22,6 +22,9 @@ jobs:
       - name: Regression tests
         run: node tests/regression.mjs
 
+      - name: Daily teaching actuals regression
+        run: node tests/actuals.mjs
+
       - name: Startup smoke test
         run: node tests/startup-smoke.mjs
 
