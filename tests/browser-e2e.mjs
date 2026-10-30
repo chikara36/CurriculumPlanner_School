@@ -85,7 +85,12 @@ try{
  await page.locator('[data-action="saveActualDay"]').waitFor();
  assert((await page.locator('.modal-backdrop').innerText()).includes('理科'));
  await page.locator('[data-action="saveActualDay"]').click();
- await page.locator('[data-action="reviseActual"]').waitFor();
+ await page.waitForTimeout(400);
+ const actualDebug=await page.evaluate(async()=>{
+  const {loadState}=await import('./storage.js');
+  return {count:document.querySelectorAll('[data-action="reviseActual"]').length,modal:document.querySelector('.modal-backdrop')?.innerText?.slice(0,260)||'',toast:document.querySelector('#toasts')?.innerText||'',saved:(await loadState())?.operations?.actualDays?.length||0};
+ });
+ assert(actualDebug.count>0,'Actual confirmation failed: '+JSON.stringify(actualDebug));
  let totals=await page.evaluate(async()=>{const {loadState}=await import('./storage.js'),{actualTotals}=await import('./actuals.js');return actualTotals(await loadState())});
  assert.equal(totals.length,1);
  assert.equal(totals[0].standardUnits,0.9);
