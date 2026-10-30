@@ -242,6 +242,114 @@ function absenceProposals(m,teacherId,week,day){
   return {affected,proposals:uniq.map(({sig,...x})=>x).sort((a,b)=>(a.metrics.hard.length*100+a.changes.length)-(b.metrics.hard.length*100+b.changes.length))};
 }
 
+
+/**
+ * Rebuild one calendar week without changing the master repeating timetable.
+ * Same-class swaps preserve class, teacher and subject period counts.
+ * Incomplete results are explicitly unresolved, never falsely "confirmed".
+ */
+function weeklyReplan(m,week,conditions){
+ const targetWeek=Number(week),absences=(conditions||[]).filter(a=>Number(a.week)===targetWeek);
+ const adjusted={...m,teachers:m.teachers.map(t=>({...t,leaves:[...(t.leaves||[])]}))};
+ for(const a of absences){
+  const t=adjusted.teachers.find(t=>t.id===a.teacherId);
+  if(t)t.leaves.push({week:targetWeek,day:Number(a.day),segment:a.segment||'FULL',startPeriod:3,endPeriod:2});
+ }
+ const mp=maps(adjusted),original=clone(m.placements||[]);
+ let ps=clone(original);const changes=[],unresolved=[];
+ const names=id=>mp.teach.get(id)?.name||id;
+ const affected=p=>p.week===targetWeek&&effectiveTeachers(mp.les.get(p.lessonId),p).some(tid=>teacherUnavailable(mp.teach.get(tid),p.week,p.day,p.period));
+ function units(placements){
+  const by=new Map();
+  for(const p of placements){
+   if(p.week!==targetWeek)continue;
+   const l=mp.les.get(p.lessonId);if(!l||l.classIds?.length!==1||l.syncGroup)continue;
+   const key=p.blockId?'b:'+p.blockId:'p:'+p.id;
+   if(!by.has(key))by.set(key,[]);
+   by.get(key).push(p);
+  }
+  return [...by.values()].map(items=>{
+   const sorted=[...items].sort((a,b)=>a.period-b.period);
+   const c=mp.les.get(sorted[0].lessonId)?.classIds?.[0];
+   const contiguous=sorted.every((p,i)=>p.day===sorted[0].day&&p.period===sorted[0].period+i);
+   const span=Number(mp.les.get(sorted[0].lessonId)?.blockSize||1);
+   return {items:sorted,classId:c,day:sorted[0].day,period:sorted[0].period,span:sorted.length,valid:contiguous&&sorted.length===span&&!sorted.some(p=>p.locked)};
+  }).filter(x=>x.classId);
+ }
+ const flagged=()=>ps.filter(affected);
+ function candidateFor(rotation){
+  // Each entry {unit, dest}. Source placements remain structurally intact.
+  const removed=new Set(rotation.flatMap(x=>x.unit.items.map(p=>p.id)));
+  const stable=ps.filter(p=>!removed.has(p.id));
+  const moved=[];
+  for(const {unit,dest} of rotation){
+   const off=dest.period-unit.period;
+   moved.push(...unit.items.map(p=>({...p,day:dest.day,period:p.period+off})));
+  }
+  if(moved.some(affected))return null;
+  const working=stable.slice();
+  for(const p of moved){
+   const conflict=hardForTask(adjusted,mp,[p.lessonId],p,working,[],null,{prefix:false,candidatePlacements:[p]});
+   if(conflict.length)return null;
+   working.push(p);
+  }
+  return {placements:working,moved};
+ }
+ // First try a two-unit exchange. If necessary, a three-unit rotation.
+ const maxIterations=Math.min(100,original.length+10);
+ for(let iteration=0;iteration<maxIterations;iteration++){
+  const affectedNow=flagged();if(!affectedNow.length)break;
+  const countBefore=affectedNow.length,allUnits=units(ps);
+  const affectedUnit=allUnits.find(u=>u.items.some(p=>p.id===affectedNow[0].id));
+  if(!affectedUnit||!affectedUnit.valid){
+   const p=affectedNow[0],l=mp.les.get(p.lessonId);
+   unresolved.push({lessonId:p.lessonId,day:p.day,period:p.period,teacherIds:effectiveTeachers(l,p),text:`${D[p.day]}${p.period+1}限 ${l?.subject||'授業'}：合同授業・固定・連続ブロックの条件で自動移動できません`});
+   break;
+  }
+  const pool=allUnits.filter(u=>u.valid&&u.classId===affectedUnit.classId&&u.span===affectedUnit.span&&u!==affectedUnit&&u.day!==affectedUnit.day);
+  let winner=null,score=Infinity;
+  const check=(rotation,otherUnits)=>{
+   const result=candidateFor(rotation);if(!result)return;
+   const remaining=result.placements.filter(affected).length;
+   if(remaining>=countBefore)return;
+   const moves=rotation.length,scoreNow=remaining*1000+moves*20+Math.max(0,rotation[0].dest.day-affectedUnit.day)*0.2;
+   if(scoreNow<score){score=scoreNow;winner={...result,rotation,otherUnits}};
+  };
+  for(const u of pool)check([{unit:affectedUnit,dest:u},{unit:u,dest:affectedUnit}],[u]);
+  if(!winner){
+   for(const u of pool){
+    for(const v of pool){
+     if(u===v||u.day===v.day&&u.period===v.period)continue;
+     check([{unit:affectedUnit,dest:u},{unit:u,dest:v},{unit:v,dest:affectedUnit}],[u,v]);
+    }
+   }
+  }
+  if(!winner){
+   const p=affectedUnit.items[0],l=mp.les.get(p.lessonId);
+   unresolved.push({lessonId:p.lessonId,day:p.day,period:p.period,teacherIds:effectiveTeachers(l,p),text:`${D[p.day]}${p.period+1}限 ${l?.subject||'授業'}（${names(effectiveTeachers(l,p)[0])}）：同じ学級内で条件を満たす別日への交換先がありません`});
+   break;
+  }
+  const beforeUnits=winner.rotation.map(({unit,dest})=>{
+   const l=mp.les.get(unit.items[0].lessonId);
+   return {subject:l.subject,className:mp.cls.get(unit.classId)?.name||unit.classId,teacherNames:effectiveTeachers(l,unit.items[0]).map(names),fromDay:unit.day,fromPeriod:unit.period,toDay:dest.day,toPeriod:dest.period,span:unit.span};
+  });
+  ps=winner.placements;
+  for(const c of beforeUnits)changes.push({type:'week-swap',...c,text:`${c.className} ${c.subject}（${c.teacherNames.join('・')||'担当未定'}）：${D[c.fromDay]}${c.fromPeriod+1}限 → ${D[c.toDay]}${c.toPeriod+1}限${c.span>1?'（'+c.span+'コマ連続）':''}`});
+ }
+ for(const p of flagged()){
+  if(unresolved.some(u=>u.lessonId===p.lessonId&&u.day===p.day&&u.period===p.period))continue;
+  const l=mp.les.get(p.lessonId);
+  unresolved.push({lessonId:p.lessonId,day:p.day,period:p.period,teacherIds:effectiveTeachers(l,p),text:`${D[p.day]}${p.period+1}限 ${l?.subject||'授業'}：不在条件が残っています`});
+ }
+ // Retain prior hard issues if base was already imperfect; reject any NEW ones.
+ const normalBase=scheduleMetrics(m,original);
+ const updated=scheduleMetrics(adjusted,ps);
+ const prior=new Map();
+ for(const issue of normalBase.hard||[])prior.set(issue.type+'|'+issue.text,(prior.get(issue.type+'|'+issue.text)||0)+1);
+ const introduced=[];
+ for(const h of updated.hard||[]){const k=h.type+'|'+h.text,c=prior.get(k)||0;if(c)prior.set(k,c-1);else introduced.push(h)}
+ return {ok:unresolved.length===0&&introduced.length===0,week:targetWeek,placements:ps,changes,unresolved,introduced,metrics:updated,originalAffected:original.filter(affected).length};
+}
 self.onmessage=e=>{
   const {id,action,model}=e.data||{};try{
     let result;
@@ -250,6 +358,7 @@ self.onmessage=e=>{
     else if(action==='move')result=movePlacement(model,e.data.placementId,e.data.target);
     else if(action==='place')result=placeLesson(model,e.data.lessonId,e.data.target);
     else if(action==='absence')result=absenceProposals(model,e.data.teacherId,e.data.week,e.data.day);
+    else if(action==='weeklyReplan')result=weeklyReplan(model,e.data.week,e.data.conditions||[]);
     else throw new Error('Unknown solver action');
     self.postMessage({id,ok:true,result});
   }catch(err){self.postMessage({id,ok:false,error:err?.stack||String(err)})}
