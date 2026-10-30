@@ -5,7 +5,7 @@ import {solveSchedule,scheduleMetrics,movePlacement,placeLesson,absenceProposals
 import {saveToDrive,loadFromDrive} from './drive.js';
 import {reportByType} from './reports.js';
 import {dateWeekday,actualDayRows,saveActualDay,subjectProgress} from './actuals.js';
-import {mondayFor,weekDates,registeredConditions,validateAbsence,absenceAt,weekHasActuals,weeklyTemporarySchedules} from './weekly.js';
+import {mondayFor,weekDates,registeredConditions,validateAbsence,absenceAt,weekHasActuals,weeklyTemporarySchedules,weeklyConditionsMatch} from './weekly.js';
 
 const NAV=[
   ['basic','01','基本情報'],['goals','02','教育目標・重点'],['calendar','03','年間カレンダー'],['days','04','授業日数・週時数'],
@@ -251,7 +251,7 @@ function renderWeeklyPanel(){
  <div class="inline" style="margin-top:12px"><button class="btn primary" data-action="confirmWeeklyPlan" ${!prev.result.ok?'disabled':''}>この週の時間割を確定・保存</button><span class="help">確定すると、月〜金の臨時時間割を日付付きで保存します。授業実績は実施後に別途確定します。</span></div>`:''}
  </div>
  <div style="height:12px"></div>
- ${card('③ 確定した週の時間割',`<div class="table-wrap"><table class="table"><thead><tr><th>対象週</th><th>登録条件</th><th>移動件数</th><th>確定日時</th><th></th></tr></thead><tbody>${finalized.map(p=>`<tr><td>${p.weekStart}〜${weekDates(p.weekStart)[4]}</td><td>${p.absences.length}件</td><td>${p.changes.length}件</td><td>${fmtTime(p.confirmedAt)}</td><td><button class="btn small" data-action="viewWeeklyPlan" data-id="${p.id}">内容を見る</button></td></tr>`).join('')||'<tr><td colspan="5">まだ確定していません。</td></tr>'}</tbody></table></div>`,'確定時の条件・変更内容・週の授業配置を保管します。確認済みの授業実績は変更しません。')}
+ ${card('③ 確定した週の時間割',`<div class="table-wrap"><table class="table"><thead><tr><th>対象週</th><th>登録条件</th><th>移動件数</th><th>確定日時</th><th></th></tr></thead><tbody>${finalized.map(p=>`<tr><td>${p.weekStart}〜${weekDates(p.weekStart)[4]}</td><td>${p.absences.length}件</td><td>${p.changes.length}件</td><td>${fmtTime(p.confirmedAt)} ${weeklyConditionsMatch(state,p)?'<span class="badge ok">確定済</span>':'<span class="badge warn">条件変更・再編成必要</span>'}</td><td><button class="btn small" data-action="viewWeeklyPlan" data-id="${p.id}">内容を見る</button></td></tr>`).join('')||'<tr><td colspan="5">まだ確定していません。</td></tr>'}</tbody></table></div>`,'確定時の条件・変更内容・週の授業配置を保管します。確認済みの授業実績は変更しません。')}
  `;
 }
 
@@ -298,12 +298,12 @@ function showWeeklyPlan(id){
 function showWeeklyDayDetail(id){
  const x=state.operations.temporarySchedules.find(t=>t.id===id);if(!x)return;
  const plan=(state.operations.weeklyPlans||[]).find(p=>p.id===x.weeklyPlanId);
- const day=dateWeekday(x.date);
+ const day=dateWeekday(x.date),stale=!weeklyConditionsMatch(state,plan);
  const rows=(x.placements||[]).filter(p=>p.week===x.week&&p.day===day).map(p=>{
   const l=lessonById(state,p.lessonId);
   return l?{p,l,teacherNames:(p.teacherIdsOverride?.length?p.teacherIdsOverride:l.teacherIds||[]).map(id=>teacherById(state,id)?.name||id)}:null;
  }).filter(Boolean);
- openModal('確定済みの日別時間割',`<div class="notice info">${x.date}｜${esc(x.label)}。この日は週次一括編成で確定したため、ここでは個別編集しません。再編成は週単位で行います。</div><div class="table-wrap" style="margin-top:12px"><table class="table"><thead><tr><th>時限</th><th>学級</th><th>教科</th><th>担当</th></tr></thead><tbody>${rows.sort((a,b)=>a.p.period-b.p.period).map(({p,l,teacherNames})=>`<tr><td>${p.period+1}限</td><td>${(l.classIds||[]).map(c=>esc(classById(state,c)?.name||c)).join('・')}</td><td>${esc(l.subject)}</td><td>${esc(teacherNames.join('・'))}</td></tr>`).join('')}</tbody></table></div><div class="help">週の確定日：${fmtTime(plan?.confirmedAt)}。実績は当日実施後に「実績入力」から確定してください。</div>`,`<button class="btn" data-action="closeModal">閉じる</button>`);
+ openModal('確定済みの日別時間割',`<div class="notice ${stale?'warn':'info'}">${stale?'不在条件が変更されています。週次時間割の再編成が必要です。':''}${x.date}｜${esc(x.label)}。この日は週次一括編成で確定したため、ここでは個別編集しません。再編成は週単位で行います。</div><div class="table-wrap" style="margin-top:12px"><table class="table"><thead><tr><th>時限</th><th>学級</th><th>教科</th><th>担当</th></tr></thead><tbody>${rows.sort((a,b)=>a.p.period-b.p.period).map(({p,l,teacherNames})=>`<tr><td>${p.period+1}限</td><td>${(l.classIds||[]).map(c=>esc(classById(state,c)?.name||c)).join('・')}</td><td>${esc(l.subject)}</td><td>${esc(teacherNames.join('・'))}</td></tr>`).join('')}</tbody></table></div><div class="help">週の確定日：${fmtTime(plan?.confirmedAt)}。実績は当日実施後に「実績入力」から確定してください。</div>`,`<button class="btn" data-action="closeModal">閉じる</button>`);
 }
 function renderOperations(){
  return pageHead('10 出張・欠勤と週次時間割','複数教員の不在条件を登録し、週の時間割をまとめて組み替えます。確定後、日別の授業実績に連動します。')+
@@ -447,7 +447,11 @@ async function handleClick(e){
     if(a==='generateWeeklyPlan'){await generateWeeklyPlan();return}
     if(a==='confirmWeeklyPlan'){confirmWeeklyPlan();return}
     if(a==='viewWeeklyPlan'){showWeeklyPlan(b.dataset.id);return}
-    if(a==='recordActual'){const x=state.operations.temporarySchedules.find(y=>y.id===b.dataset.id);if(x)showActualModal({date:x.date,week:x.week,placements:x.placements,sourceId:x.id,sourceName:x.label});return}
+    if(a==='recordActual'){
+      const x=state.operations.temporarySchedules.find(y=>y.id===b.dataset.id);if(!x)return;
+      if(x.source==='weekly-replan'){const p=(state.operations.weeklyPlans||[]).find(p=>p.id===x.weeklyPlanId);if(!weeklyConditionsMatch(state,p))return toast('不在条件が確定時から変更されています。週次時間割を再編成してから実績を入力してください','warn')}
+      showActualModal({date:x.date,week:x.week,placements:x.placements,sourceId:x.id,sourceName:x.label});return;
+    }
     if(a==='recordBaseActual'){showActualModal({date:$('#actualBaseDate')?.value,week:Number($('#actualBaseWeek')?.value||0),placements:state.timetable.placements});return}
     if(a==='reviseActual'){const x=(state.operations.actualDays||[]).find(d=>d.date===b.dataset.date);if(x)showActualModal({date:x.date,week:x.week,sourceId:x.sourceId,sourceName:x.sourceName,correction:true});return}
     if(a==='removeTemporary'){state.operations.temporarySchedules=state.operations.temporarySchedules.filter(x=>x.id!==b.dataset.id);scheduleSave();render();return}
