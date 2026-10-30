@@ -85,7 +85,8 @@ try{
  await page.locator('[data-action="saveActualDay"]').waitFor();
  assert((await page.locator('.modal-backdrop').innerText()).includes('理科'));
  await page.locator('[data-action="saveActualDay"]').click();
- await page.waitForTimeout(400);
+ await page.waitForFunction(()=>document.querySelector('#saveChip')?.textContent==='端末に保存済み',{timeout:5000});
+ await page.waitForTimeout(100);
  const actualDebug=await page.evaluate(async()=>{
   const {loadState}=await import('./storage.js');
   return {count:document.querySelectorAll('[data-action="reviseActual"]').length,modal:document.querySelector('.modal-backdrop')?.innerText?.slice(0,260)||'',toast:document.querySelector('#toasts')?.innerText||'',saved:(await loadState())?.operations?.actualDays?.length||0};
@@ -98,6 +99,7 @@ try{
  await page.locator('[data-actual-status="0"]').selectOption('cancelled');
  page.once('dialog',dialog=>dialog.accept());
  await page.locator('[data-action="saveActualDay"]').click();
+ await page.waitForFunction(()=>document.querySelector('#saveChip')?.textContent==='端末に保存済み',{timeout:5000});
  totals=await page.evaluate(async()=>{const {loadState}=await import('./storage.js'),{actualTotals}=await import('./actuals.js');return actualTotals(await loadState())});
  assert.equal(totals.length,0,'cancelled teaching must not earn hours');
  const audit=await page.evaluate(async()=>{const {loadState}=await import('./storage.js');return (await loadState()).operations.actualDays[0]});
