@@ -4,11 +4,12 @@ import {calendarStats,weeklyTargetForGrade,dailyPattern,gradePatterns,monthMatri
 import {solveSchedule,scheduleMetrics,movePlacement,placeLesson,absenceProposals,buildSolverModel} from './solver-client.js';
 import {saveToDrive,loadFromDrive} from './drive.js';
 import {reportByType} from './reports.js';
+import {dateWeekday,actualDayRows,saveActualDay,subjectProgress} from './actuals.js';
 
 const NAV=[
   ['basic','01','基本情報'],['goals','02','教育目標・重点'],['calendar','03','年間カレンダー'],['days','04','授業日数・週時数'],
   ['hours','05','授業時数'],['integrated','06','総合・特別活動'],['periods','07','校時表'],['resources','08','時間割データ'],
-  ['timetable','09','時間割編成'],['operations','10','臨時変更・欠勤'],['checks','11','最終チェック'],['reports','12','帳票・保存']
+  ['timetable','09','時間割編成'],['operations','10','臨時変更・実績'],['checks','11','最終チェック'],['reports','12','帳票・保存']
 ];
 let state=null,saveTimer=null,busy=false,metricsCache=null,absenceCache=null,deferredPrompt=null,mutationRevision=0;
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
@@ -206,10 +207,28 @@ function renderPlacementItem(p){const l=lessonById(state,p.lessonId);if(!l)retur
 function renderSelectedPlacement(p){const l=lessonById(state,p.lessonId);return `<div class="card flat"><h4>選択中：${esc(l?.subject||'')}</h4><div class="sub">${DAYS[p.day]}曜 ${p.period+1}限 / ${p.week+1}週${Number(l?.blockSize||1)>1?` / ${Number(l.blockSize)}コマ連続`:''}</div><div class="inline"><button class="btn small" data-action="toggleLock" data-id="${p.id}">${p.locked?'固定解除':'固定'}</button><button class="btn small danger" data-action="removePlacement" data-id="${p.id}">駒を外す</button></div></div>`}
 
 function renderOperations(){
-  const cache=absenceCache;return pageHead('10 臨時変更・欠勤対応','基本時間割は変更せず、欠勤・行事等による一日限りの変更案を作り、臨時時間割として保存します。')+
+  const cache=absenceCache;return pageHead('10 臨時変更・授業実績','基本時間割を保持したまま、日別の時間割変更と実際に行った授業を管理します。')+
   `<div class="grid cols2">${card('教員欠勤リプラン',`<div class="form-grid">${field('欠勤教員',`<select id="absenceTeacher">${state.resources.teachers.map(t=>`<option value="${t.id}">${esc(t.name)}</option>`).join('')}</select>`,'span5')}${field('サイクル週',`<select id="absenceWeek">${Array.from({length:state.timetable.cycleWeeks},(_,i)=>`<option value="${i}">${i+1}週</option>`).join('')}</select>`,'span3')}${field('曜日',`<select id="absenceDay">${DAYS.map((d,i)=>`<option value="${i}">${d}</option>`).join('')}</select>`,'span4')}${field('実施日（記録用）','<input type="date" id="absenceDate">','span5')}</div><div class="inline" style="margin-top:10px"><button class="btn primary" data-action="generateAbsence" ${busy?'disabled':''}>変更案を作成</button></div><div class="help" style="margin-top:8px">代替教員候補と、同一学級内の授業交換を探索して複数案を比較します。基本時間割は上書きしません。</div>`) }
-  ${card('臨時時間割',`<div class="inline"><button class="btn" data-action="createTemporary">＋ 基本時間割から作成</button></div><div class="table-wrap" style="margin-top:10px"><table class="table"><thead><tr><th>日付</th><th>名称</th><th>変更内容</th><th></th></tr></thead><tbody>${(state.operations.temporarySchedules||[]).map(x=>`<tr><td>${esc(x.date||'-')}</td><td>${esc(x.label)}</td><td>${esc((x.changes||[]).map(c=>c.text).join(' / ')||'基本時間割を複製')}</td><td><button class="btn small" data-action="viewTemporary" data-id="${x.id}">確認</button> <button class="btn small danger" data-action="removeTemporary" data-id="${x.id}">削除</button></td></tr>`).join('')||'<tr><td colspan="4" class="muted">臨時時間割は未作成です。</td></tr>'}</tbody></table></div>`)}
-  </div>${cache?`<div style="height:12px"></div>${renderAbsenceResults(cache)}`:''}`;
+  ${card('臨時時間割',`<div class="inline"><button class="btn" data-action="createTemporary">＋ 基本時間割から作成</button></div><div class="table-wrap" style="margin-top:10px"><table class="table"><thead><tr><th>日付</th><th>名称</th><th>変更内容</th><th></th></tr></thead><tbody>${(state.operations.temporarySchedules||[]).map(x=>`<tr><td>${esc(x.date||'-')}</td><td>${esc(x.label)}</td><td>${esc((x.changes||[]).map(c=>c.text).join(' / ')||'基本時間割を複製')}</td><td><button class="btn small" data-action="viewTemporary" data-id="${x.id}">確認・変更</button> <button class="btn small blue" data-action="recordActual" data-id="${x.id}">実績入力</button> <button class="btn small danger" data-action="removeTemporary" data-id="${x.id}">削除</button></td></tr>`).join('')||'<tr><td colspan="4" class="muted">臨時時間割は未作成です。</td></tr>'}</tbody></table></div>`)}
+  </div>${renderActualDashboard()}${cache?`<div style="height:12px"></div>${renderAbsenceResults(cache)}`:''}`;
+}
+
+function renderActualDashboard(){
+ const cls=classById(state,state.ui.actualClassId)||state.resources.classes[0];
+ const progress=cls?subjectProgress(state,cls.grade,cls.id):[];
+ const days=[...(state.operations.actualDays||[])].sort((a,b)=>b.date.localeCompare(a.date));
+ return `<div style="height:14px"></div>
+ ${card('日別の授業実績を確定',`<div class="notice info">授業の入替・代替・休止は臨時時間割で管理し、実施後に実績を確定してください。予定の変更だけでは実績に加算しません。</div>
+ <div class="form-grid" style="margin-top:10px">
+ ${field('実施日','<input type="date" id="actualBaseDate">','span4')}
+ ${field('サイクル週',`<select id="actualBaseWeek">${Array.from({length:state.timetable.cycleWeeks},(_,i)=>`<option value="${i}">${i+1}週</option>`).join('')}</select>`,'span3')}
+ <div class="field span5"><label>基本時間割から記録</label><button class="btn primary" data-action="recordBaseActual">実績入力を開く</button></div></div>
+ <div class="table-wrap" style="margin-top:10px"><table class="table"><thead><tr><th>日付</th><th>記録元</th><th>実施コマ</th><th>記録</th></tr></thead><tbody>
+ ${days.map(d=>`<tr><td>${esc(d.date)}</td><td>${esc(d.sourceName||'基本時間割')}</td><td class="num">${d.rows.filter(r=>r.status==='held').length}</td><td><button class="btn small" data-action="reviseActual" data-date="${d.date}">内容確認・訂正</button> ${d.history?.length?`<span class="badge warn">訂正${d.history.length}回</span>`:''}</td></tr>`).join('')||'<tr><td colspan="4" class="muted">まだ確定した授業実績はありません。</td></tr>'}</tbody></table></div>`)}
+ <div style="height:12px"></div>
+ ${card('学級別の年間授業時数｜計画と実績',`<div class="inline" style="margin-bottom:10px"><strong>学級</strong><select id="actualClassSelector" data-action="actualClassSelector">${state.resources.classes.map(c=>`<option value="${c.id}" ${cls?.id===c.id?'selected':''}>${esc(c.name)}</option>`).join('')}</select><span class="chip info">確定した授業のみ計上</span></div>
+ <div class="table-wrap"><table class="table"><thead><tr><th>教科</th><th>年間計画</th><th>実施コマ</th><th>実施分数</th><th>標準時数換算</th><th>残り</th></tr></thead><tbody>${progress.map(p=>`<tr><td>${esc(p.subject)}</td><td class="num">${p.target}</td><td class="num">${p.periods}</td><td class="num">${p.minutes}</td><td class="num">${p.completed.toFixed(2)}</td><td class="num"><strong>${p.remaining.toFixed(2)}</strong></td></tr>`).join('')||'<tr><td colspan="6">授業設定がありません。</td></tr>'}</tbody></table></div>`,'小学校45分・中学校50分を標準1単位時間として換算します。中学校45分授業は1コマ＝0.90単位時間です。')}
+ `;
 }
 function renderAbsenceResults(cache){
   if(!cache.affected?.length)return card('欠勤影響','<div class="notice ok">指定した教員はこの曜日に授業がありません。</div>');
