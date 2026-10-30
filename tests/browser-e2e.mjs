@@ -105,7 +105,7 @@ try{
  const audit=await page.evaluate(async()=>{const {loadState}=await import('./storage.js');return (await loadState()).operations.actualDays[0]});
  assert.equal(audit.history.length,1,'corrected hours must preserve the previous snapshot');
  await page.locator('[data-action="createTemporary"]').click();
- await page.locator('#tmpDate').fill('2026-10-30');
+ await page.locator('#tmpDate').fill('2026-11-06');
  await page.locator('#tmpLabel').fill('出張に伴う変更');
  await page.locator('[data-action="saveTemporary"]').click();
  await page.locator('[data-action="viewTemporary"]').first().click();
@@ -114,8 +114,23 @@ try{
  await page.locator('#tmpReplaceLesson').selectOption(seed.otherId);
  await page.locator('[data-action="tempReplaceLesson"]').click();
  await page.locator('.modal-backdrop').waitFor();
- assert((await page.locator('.modal-backdrop').innerText()).includes('数学'),'replacement subject should appear in changed schedule');
+ const changed=await page.evaluate(async()=>{
+  const {loadState}=await import('./storage.js');
+  const list=(await loadState()).operations.temporarySchedules;
+  return list.at(-1).placements.filter(p=>p.week===0&&p.day===4&&p.period===0).map(p=>p.lessonId);
+ });
+ assert(changed.includes(seed.otherId),'temporary schedule must really contain the chosen replacement; actual: '+JSON.stringify(changed));
  await page.locator('[data-action="closeModal"]').last().click();
+ await page.locator('[data-action="recordActual"]').first().click();
+ await page.locator('[data-action="saveActualDay"]').waitFor();
+ assert((await page.locator('.modal-backdrop').innerText()).includes('数学'),'daily actuals should use the replaced subject');
+ await page.locator('[data-action="saveActualDay"]').click();
+ await page.waitForFunction(()=>document.querySelector('#saveChip')?.textContent==='端末に保存済み');
+ const latest=await page.evaluate(async()=>{const {loadState}=await import('./storage.js');return (await loadState()).operations.actualDays.find(x=>x.date==='2026-11-06')});
+ assert(latest?.rows.some(x=>x.subject==='数学'),'replacement must be stored as real taught subject');
+ await page.locator('[data-nav="reports"]').click();
+ await page.locator('#reportType').selectOption('actuals');
+ assert((await page.locator('#reportPreview').innerText()).includes('授業実績・年間時数進捗'));
  assert.deepEqual(errors,[],'browser errors: '+errors.join('; '));
  console.log('Real Chrome E2E passed: startup, settings, persistence, actuals confirmation/correction and dated replacement.');
 }catch(err){
