@@ -132,6 +132,53 @@ try{
  await page.locator('[data-nav="reports"]').click();
  await page.locator('#reportType').selectOption('actuals');
  assert((await page.locator('#reportPreview').innerText()).includes('授業実績・年間時数進捗'));
+ // Weekly multi-teacher absences: full-week reallocation and locked audit.
+ await page.evaluate(async()=>{
+  const {defaultState}=await import('./model.js'),{saveState}=await import('./storage.js');
+  const st=defaultState(),c=st.resources.classes[0],a=st.resources.teachers[0],b=st.resources.teachers[1];
+  const x=st.lessons.find(l=>l.classIds.length===1&&l.classIds[0]===c.id&&l.subject==='理科');
+  const y=st.lessons.find(l=>l.classIds.length===1&&l.classIds[0]===c.id&&l.subject==='数学');
+  x.teacherIds=[a.id];y.teacherIds=[b.id];
+  st.timetable.placements=[
+   {id:'weekA',lessonId:x.id,week:0,day:0,period:0,locked:false},
+   {id:'weekB',lessonId:y.id,week:0,day:1,period:0,locked:false}
+  ];
+  st.timetable.cycleWeeks=2;
+  await saveState(st);
+ });
+ await page.reload({waitUntil:'domcontentloaded'});
+ await page.locator('[data-nav="operations"]').click();
+ const weeklyTeachers=await page.evaluate(async()=>{const {loadState}=await import('./storage.js');return (await loadState()).resources.teachers.slice(0,2).map(t=>t.id)});
+ await page.locator('#weeklyTeacher').selectOption(weeklyTeachers[0]);
+ await page.locator('#weeklyDate').fill('2026-11-02');
+ await page.locator('#weeklySegment').selectOption('FULL');
+ await page.locator('#weeklyCycle').selectOption('0');
+ await page.locator('[data-action="addWeeklyAbsence"]').click();
+ await page.locator('#weeklyTeacher').selectOption(weeklyTeachers[1]);
+ await page.locator('#weeklyDate').fill('2026-11-03');
+ await page.locator('#weeklySegment').selectOption('FULL');
+ await page.locator('#weeklyCycle').selectOption('0');
+ await page.locator('[data-action="addWeeklyAbsence"]').click();
+ assert((await page.locator('[data-action="removeWeeklyAbsence"]').count())===2,'both teachers must have their own conditions');
+ await page.locator('[data-action="generateWeeklyPlan"]').click();
+ await page.locator('[data-action="confirmWeeklyPlan"]').waitFor({timeout:12000});
+ assert((await page.locator('#content').innerText()).includes('確定可能な変更案'));
+ page.once('dialog',dialog=>dialog.accept());
+ await page.locator('[data-action="confirmWeeklyPlan"]').click();
+ await page.waitForFunction(()=>document.querySelector('#saveChip')?.textContent==='端末に保存済み',{timeout:5000});
+ const weekSaved=await page.evaluate(async()=>{
+  const {loadState}=await import('./storage.js');const st=await loadState();
+  const p=st.operations.weeklyPlans.find(x=>x.weekStart==='2026-11-02');
+  return {p,temps:st.operations.temporarySchedules.filter(t=>t.weeklyPlanId===p?.id),
+    base:st.timetable.placements};
+ });
+ assert.equal(weekSaved.p.absences.length,2);
+ assert.equal(weekSaved.p.changes.length,2);
+ assert.equal(weekSaved.temps.length,5);
+ assert.equal(weekSaved.base.find(p=>p.id==='weekA').day,0,'base timetable unchanged');
+ assert.equal(weekSaved.p.placements.find(p=>p.id==='weekA').day,1,'A teacher receives another day');
+ assert.equal(weekSaved.p.placements.find(p=>p.id==='weekB').day,0,'B teacher receives the other day');
+ assert((await page.locator('[data-action="recordActual"]').count())>=5);
  assert.deepEqual(errors,[],'browser errors: '+errors.join('; '));
  console.log('Real Chrome E2E passed: startup, settings, persistence, actuals confirmation/correction and dated replacement.');
 }catch(err){
