@@ -75,3 +75,33 @@ export function weeklyPeriodOverrides(state,weekStart,week){
  }
  return results;
 }
+
+/**
+ * Estimate scheduled baseline periods in a calendar date range.
+ * Not a legal/actual-hours guarantee: events and emergency schedules may replace lessons.
+ * Only one-week repeating timetables can be expanded without a week-cycle anchor date.
+ */
+export function estimatePeriodSchedule(state,entry,byDate={}){
+ if(Number(state.timetable.cycleWeeks)!==1)return null;
+ const cls=state.resources.classes.find(c=>c.id===entry.classId);
+ if(!cls)return null;
+ const related=new Set((state.lessons||[]).filter(l=>l.subject===entry.baseSubject&&(l.classIds||[]).length===1&&l.classIds[0]===cls.id).map(l=>l.id));
+ const slots=[0,0,0,0,0];
+ for(const p of state.timetable.placements||[]){
+  if(Number(p.week)!==0||!related.has(p.lessonId)||!Number.isInteger(Number(p.day))||p.day<0||p.day>4)continue;
+  slots[p.day]++;
+ }
+ let date=new Date(entry.startDate+'T12:00:00'),end=new Date(entry.endDate+'T12:00:00');
+ if(Number.isNaN(date.getTime())||Number.isNaN(end.getTime())||date>end)return null;
+ let periods=0,days=0,steps=0;
+ for(;date<=end&&steps<400;date.setDate(date.getDate()+1),steps++){
+  const key=[date.getFullYear(),String(date.getMonth()+1).padStart(2,'0'),String(date.getDate()).padStart(2,'0')].join('-');
+  if(!byDate[key]?.instruction)continue;
+  const day=(date.getDay()+6)%7;
+  if(day<5){days++;periods+=slots[day]}
+ }
+ if(steps>=400)return null;
+ const unit=state.school.type==='elementary'?45:50;
+ const standardUnits=periods*Number(state.school.lessonMinutes||unit)/unit;
+ return {instructionDays:days,periods,standardUnits,difference:Number(entry.targetHours||0)-standardUnits};
+}
