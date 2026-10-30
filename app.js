@@ -333,6 +333,9 @@ async function handleClick(e){
     if(a==='applyAbsenceProposal'){applyAbsenceProposal(Number(b.dataset.index));return}
     if(a==='createTemporary'){showTemporaryModal();return}
     if(a==='viewTemporary'){showTemporaryDetail(b.dataset.id);return}
+    if(a==='recordActual'){const x=state.operations.temporarySchedules.find(y=>y.id===b.dataset.id);if(x)showActualModal({date:x.date,week:x.week,placements:x.placements,sourceId:x.id,sourceName:x.label});return}
+    if(a==='recordBaseActual'){showActualModal({date:$('#actualBaseDate')?.value,week:Number($('#actualBaseWeek')?.value||0),placements:state.timetable.placements});return}
+    if(a==='reviseActual'){const x=(state.operations.actualDays||[]).find(d=>d.date===b.dataset.date);if(x)showActualModal({date:x.date,week:x.week,sourceId:x.sourceId,sourceName:x.sourceName,correction:true});return}
     if(a==='removeTemporary'){state.operations.temporarySchedules=state.operations.temporarySchedules.filter(x=>x.id!==b.dataset.id);scheduleSave();render();return}
     if(a==='printReport'){printCurrentReport();return}
     if(a==='resetAll'){if(confirm('端末内データを初期化します。先にJSONバックアップを保存することをおすすめします。')){mutationRevision++;state=defaultState();await saveState(state);metricsCache=null;absenceCache=null;render();refreshMetrics()}return}
@@ -373,6 +376,7 @@ function handleChange(e){
   const a=e.target.dataset.action;
   if(a==='scheduleViewId'){state.timetable.view.id=e.target.value;scheduleSave();render()}
   if(a==='reportType'){state.ui.reportType=e.target.value;scheduleSave();renderReportPreview()}
+  if(a==='actualClassSelector'){state.ui.actualClassId=e.target.value;scheduleSave();render()}
   if(a==='allocKind'){const g=Number(e.target.dataset.grade),el=$('#allocNewSubject_'+g);if(el)el.placeholder=e.target.value==='new_subject'?'新設教科の名称を入力':'新設教科を選択するときだけ入力';}
   if(a==='assignmentTeacher'){const l=lessonById(state,e.target.dataset.lessonId);if(l){const tid=e.target.value;l.teacherIds=tid?[tid]:[];metricsCache=null;absenceCache=null;state.timetable.lastResult=null;scheduleSave();refreshMetrics();render();toast('担当教員を更新しました。既存の時間割は保持し、制約を再確認します','ok')}}
   if(a==='assignmentBlock'){const l=lessonById(state,e.target.dataset.lessonId);if(l){const oldBlock=l.blockSize||1;l.blockSize=Math.max(1,Math.min(3,Number(e.target.value||1)));const affected=state.timetable.placements.filter(p=>p.lessonId===l.id);if(affected.length&&!confirm('この授業の配置済みコマだけ解除して連続ブロックを再編成します。続けますか？')){l.blockSize=oldBlock;render();return}pushUndo();const groupIds=new Set(affected.map(p=>p.blockId).filter(Boolean));state.timetable.placements=state.timetable.placements.filter(p=>p.lessonId!==l.id&&!groupIds.has(p.blockId));metricsCache=null;scheduleSave();refreshMetrics();render()}}
@@ -424,6 +428,21 @@ async function temporaryNewConflicts(before,after,allowPlannedGap=false){
  const introduced=(newMetrics.hard||[]).find(h=>!(allowPlannedGap&&h.type==='class-gap')&&!prior.has(h.type+'|'+h.text));
  return introduced?.text||'';
 }
+
+let actualDraftRows=null;
+function showActualModal({date,week,placements=[],sourceId=null,sourceName='基本時間割',correction=false}){
+ if(dateWeekday(date)<0||dateWeekday(date)>4)return toast('月曜から金曜の有効な日付を指定してください','warn');
+ const old=(state.operations.actualDays||[]).find(d=>d.date===date);
+ if(old&&!correction)return toast('この日は実績確定済みです。「内容確認・訂正」から開いてください','warn');
+ let rows;
+ try{rows=correction?deepClone(old.rows):actualDayRows(state,{date,week,placements})}catch(err){return toast(err.message,'warn')}
+ if(!rows?.length)return toast('この日の時間割に授業がありません。日付とサイクル週を確認してください','warn');
+ const content=`<div class="notice info">${esc(date)}｜${esc(sourceName)}。実施した授業のみ「実施」、休講などは「未実施」を選んでください。${correction?'訂正前の確定データは履歴に保存します。':''}</div>
+ <div class="table-wrap" style="margin-top:12px;max-height:55vh;overflow:auto"><table class="table"><thead><tr><th>学級</th><th>時限</th><th>教科</th><th>実施区分</th><th>分数</th><th>備考</th></tr></thead><tbody>${rows.map((r,i)=>`<tr><td>${esc(r.className)}</td><td class="num">${r.period+1}</td><td>${esc(r.subject)}</td><td><select data-actual-status="${i}"><option value="held" ${r.status==='held'?'selected':''}>実施</option><option value="cancelled" ${r.status==='cancelled'?'selected':''}>未実施</option></select></td><td><input type="number" min="1" max="120" value="${n(r.minutes)}" data-actual-minutes="${i}" style="width:80px"></td><td><input value="${attr(r.note||'')}" data-actual-note="${i}" placeholder="欠課・代替理由"></td></tr>`).join('')}</tbody></table></div>
+ <div class="help" style="margin-top:10px">保存時点の教科・担当・実施分数を記録します。後から基本時間割を編集しても実績は変わりません。日付の二重登録は防止します。</div>`;
+ actualDraftRows=rows;
+ openModal(correction?'授業実績を訂正':'授業実績を確定',content,`<button class="btn" data-action="closeModal">キャンセル</button><button class="btn primary" data-action="saveActualDay" data-date="${date}" data-week="${week}" data-source="${attr(sourceId||'')}" data-name="${attr(sourceName)}" data-correction="${correction?'1':'0'}">${correction?'訂正を確定':'実績を確定保存'}</button>`);
+}
 function showTemporaryModal(){openModal('臨時時間割を作成',`<div class="form-grid">${field('日付','<input type="date" id="tmpDate">','span4')}${field('名称','<input id="tmpLabel" placeholder="例：文化祭前日・短縮日課">','span5')}${field('サイクル週',`<select id="tmpWeek">${Array.from({length:state.timetable.cycleWeeks},(_,w)=>`<option value="${w}">${w+1}週</option>`).join('')}</select>`,'span3')}</div><div class="notice info" style="margin-top:10px">基本時間割のコピーを臨時時間割として保存します。欠勤対応案を採用した場合も同じ場所に保存されます。</div>`,`<button class="btn" data-action="closeModal">キャンセル</button><button class="btn primary" data-action="saveTemporary">作成</button>`)}
 function showTemporaryDetail(id){const x=state.operations.temporarySchedules.find(y=>y.id===id);if(!x)return;const ps=x.placements||[];const week=Number(x.week||0);const slotOptions=[];for(let d=0;d<5;d++)for(let p=0;p<Math.min(state.periods.length,state.instruction.maxPeriods);p++)slotOptions.push(`<option value="${d}-${p}">${DAYS[d]} ${p+1}限</option>`);const body=`<div class="notice info">${esc(x.date||'日付未設定')}｜${esc(x.label)}｜${week+1}週パターン</div><div style="margin-top:10px">${(x.changes||[]).map(c=>`<div class="constraint"><strong>${esc(c.type||'変更')}</strong><div class="meta">${esc(c.text||'')}</div></div>`).join('')||'<div class="muted">基本時間割の複製です。</div>'}</div><div class="kpi-line"><span>保存駒数</span><strong>${ps.length}</strong></div>
   <div style="height:10px"></div>${card('臨時の入替',`<div class="form-grid">${field('学級',`<select id="tmpSwapClass">${state.resources.classes.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select>`,'span4')}${field('時限A',`<select id="tmpSlotA">${slotOptions.join('')}</select>`,'span4')}${field('時限B',`<select id="tmpSlotB">${slotOptions.join('')}</select>`,'span4')}</div><button class="btn small" data-action="tempSwap" data-id="${id}">2コマを入替</button>`,'合同・同時展開など複合授業は安全のため自動入替対象外です。')}
@@ -441,6 +460,19 @@ async function handleSecondaryClick(e){const b=e.target.closest('[data-action]')
   if(a==='saveTeacherConstraints'){const t=teacherById(state,b.dataset.id);if(!t)return;t.unavailable=selectedValues('teacherUnavailable');t.breakRule={enabled:$('#breakEnabled').checked,startPeriod:Math.max(0,n($('#breakStart').value)-1),endPeriod:Math.max(0,n($('#breakEnd').value)-1),minFreeSlots:Math.max(1,n($('#breakSlots').value,1)),hard:$('#breakHard').value==='true'};t.consecutiveHard=$('#consecutiveHard').value==='true';t.substituteEligible=$('#substituteEligible').checked;closeModal();scheduleSave();refreshMetrics();render();return}
   if(a==='saveFacilityConstraints'){const f=facilityById(state,b.dataset.id);if(!f)return;f.unavailable=selectedValues('facilityUnavailable');closeModal();scheduleSave();refreshMetrics();render();return}
   if(a==='saveLesson'){saveLessonFromModal(b.dataset.id,b.dataset.new==='1');return}
+  if(a==='saveActualDay'){
+    if(!actualDraftRows?.length)return toast('実績入力がありません','warn');
+    const rows=deepClone(actualDraftRows);
+    for(let i=0;i<rows.length;i++){
+      rows[i].status=$(`[data-actual-status="${i}"]`)?.value||'cancelled';
+      rows[i].minutes=Number($(`[data-actual-minutes="${i}"]`)?.value||0);
+      rows[i].note=$(`[data-actual-note="${i}"]`)?.value||'';
+    }
+    const correction=b.dataset.correction==='1';
+    if(correction&&!confirm('確定済みの授業実績を訂正します。訂正前の記録は履歴に残ります。続けますか？'))return;
+    saveActualDay(state,{date:b.dataset.date,week:Number(b.dataset.week),sourceId:b.dataset.source||null,sourceName:b.dataset.name||'',rows,allowCorrection:correction});
+    actualDraftRows=null;closeModal();scheduleSave();render();toast(correction?'訂正を履歴付きで保存しました':'授業実績を確定しました','ok');return;
+  }
   if(a==='saveTemporary'){const date=$('#tmpDate').value,label=$('#tmpLabel').value.trim()||'臨時時間割',week=Number($('#tmpWeek').value);state.operations.temporarySchedules.push({id:uid('tmp'),date,label,week,day:date?((new Date(date+'T00:00:00').getDay()+6)%7):0,placements:deepClone(state.timetable.placements),changes:[],createdAt:new Date().toISOString(),source:'manual'});closeModal();scheduleSave();render();return}
   if(a==='tempSwap'){
     const x=state.operations.temporarySchedules.find(y=>y.id===b.dataset.id);if(!x)return;
