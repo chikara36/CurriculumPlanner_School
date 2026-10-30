@@ -1,17 +1,18 @@
 import {APP_VERSION,SCHEMA_VERSION,defaultState,migrateState,deepClone,uid,DAYS,classById,teacherById,facilityById,lessonById,cycleSessionsForLesson,validateState,normalizeResources,applySchoolTypeDefaults,standardUnitMinutesForSchool,implementationPeriodsForStandardUnits,implementationExactPeriods,discretionaryLedger,discretionaryCaps,effectiveSubjectHours,maxSubjectReduction,subjectReductionPercent,reconcileCurriculumLessons} from './model.js';
 import {loadState,saveState,downloadText,readFile} from './storage.js';
 import {calendarStats,weeklyTargetForGrade,dailyPattern,gradePatterns,monthMatrix,typeLabel,isoDate} from './calendar.js';
-import {solveSchedule,scheduleMetrics,movePlacement,placeLesson,absenceProposals,buildSolverModel} from './solver-client.js';
+import {solveSchedule,scheduleMetrics,movePlacement,placeLesson,absenceProposals,buildSolverModel,replanTeacherWeek} from './solver-client.js';
 import {saveToDrive,loadFromDrive} from './drive.js';
 import {reportByType} from './reports.js';
 import {dateWeekday,actualDayRows,saveActualDay,subjectProgress} from './actuals.js';
+import {mondayFor,weekDates,registeredConditions,validateAbsence,absenceAt,weekHasActuals,weeklyTemporarySchedules} from './weekly.js';
 
 const NAV=[
   ['basic','01','基本情報'],['goals','02','教育目標・重点'],['calendar','03','年間カレンダー'],['days','04','授業日数・週時数'],
   ['hours','05','授業時数'],['integrated','06','総合・特別活動'],['periods','07','校時表'],['resources','08','時間割データ'],
   ['timetable','09','時間割編成'],['operations','10','臨時変更・実績'],['checks','11','最終チェック'],['reports','12','帳票・保存']
 ];
-let state=null,saveTimer=null,busy=false,metricsCache=null,absenceCache=null,deferredPrompt=null,mutationRevision=0;
+let state=null,saveTimer=null,busy=false,metricsCache=null,absenceCache=null,deferredPrompt=null,mutationRevision=0,weeklyPreview=null;
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 const attr=s=>esc(s).replace(/`/g,'&#96;');
@@ -206,11 +207,59 @@ function placementsForViewCell(view,w,d,p){return (state.timetable.placements||[
 function renderPlacementItem(p){const l=lessonById(state,p.lessonId);if(!l)return '';const cls=(l.classIds||[]).map(id=>classById(state,id)?.name||id).join('・'),teachers=(p.teacherIdsOverride?.length?p.teacherIdsOverride:l.teacherIds||[]).filter(Boolean).map(id=>teacherById(state,id)?.name||id).join('・');return `<div class="tt-item ${p.locked?'locked':''} ${state.timetable.selectedPlacementId===p.id?'selected':''}" draggable="true" data-drag-placement="${p.id}" data-action="selectPlacement" data-id="${p.id}"><div class="subj">${esc(l.subject)}</div><div class="meta">${esc(cls)}${teachers?` / ${esc(teachers)}`:''}</div><div class="flags">${p.locked?'<span class="badge hard">固定</span>':''}${Number(l.blockSize||1)>1?`<span class="badge info">${Number(l.blockSize)}連続</span>`:''}${l.syncGroup?'<span class="badge info">同時展開</span>':''}${p.teacherIdsOverride?.length?'<span class="badge warn">代替</span>':''}</div></div>`}
 function renderSelectedPlacement(p){const l=lessonById(state,p.lessonId);return `<div class="card flat"><h4>選択中：${esc(l?.subject||'')}</h4><div class="sub">${DAYS[p.day]}曜 ${p.period+1}限 / ${p.week+1}週${Number(l?.blockSize||1)>1?` / ${Number(l.blockSize)}コマ連続`:''}</div><div class="inline"><button class="btn small" data-action="toggleLock" data-id="${p.id}">${p.locked?'固定解除':'固定'}</button><button class="btn small danger" data-action="removePlacement" data-id="${p.id}">駒を外す</button></div></div>`}
 
+function weeklyFingerprint(start){
+ return JSON.stringify({
+  conditions:registeredConditions(state,start),
+  placements:state.timetable.placements,
+  classes:state.resources.classes,
+  teachers:state.resources.teachers,
+  lessons:state.lessons,
+  cycleWeeks:state.timetable.cycleWeeks,
+  periods:state.periods,
+  settings:state.timetable.settings
+ });
+}
+function renderWeeklyPanel(){
+ const all=(state.operations.absences||[]).slice().sort((a,b)=>a.date.localeCompare(b.date)||a.teacherId.localeCompare(b.teacherId));
+ const starts=[...new Set(all.map(a=>mondayFor(a.date)))].sort();
+ const selected=starts.includes(state.ui.weeklyStart)?state.ui.weeklyStart:starts[0]||'';
+ const conditions=selected?registeredConditions(state,selected):[];
+ const prev=weeklyPreview?.weekStart===selected?weeklyPreview:null;
+ const finalized=(state.operations.weeklyPlans||[]).slice().sort((a,b)=>b.weekStart.localeCompare(a.weekStart));
+ const label=t=>teacherById(state,t)?.name||t;
+ const seg=a=>({FULL:'終日',AM:'午前（1〜3限）',PM:'午後（4限以降）'})[a]||a;
+ return `<div class="card"><h3>① 出張・欠勤などの不在条件をまとめて登録</h3>
+ <div class="notice info">先にA先生・B先生など複数の不在を登録してください。日付ごとに終日・午前・午後を指定できます。週全体の授業を入れ替える際は、もとの担当教員の授業が別日に移ることを優先します。基本時間割は変更しません。</div>
+ <div class="form-grid" style="margin-top:12px">
+ ${field('教員',`<select id="weeklyTeacher">${state.resources.teachers.map(t=>`<option value="${t.id}">${esc(t.name)}</option>`).join('')}</select>`,'span3')}
+ ${field('不在日','<input type="date" id="weeklyDate">','span3')}
+ ${field('不在時間帯','<select id="weeklySegment"><option value="FULL">終日</option><option value="AM">午前（1〜3限）</option><option value="PM">午後（4限以降）</option></select>','span3')}
+ ${field('該当する時間割サイクル',`<select id="weeklyCycle">${Array.from({length:state.timetable.cycleWeeks},(_,i)=>`<option value="${i}">${i+1}週目</option>`).join('')}</select>`,'span3')}
+ </div>
+ <div class="inline" style="margin-top:10px"><button class="btn primary" data-action="addWeeklyAbsence">＋ 不在条件を登録</button><span class="help">週内の登録は同じサイクル週として扱います。</span></div>
+ <div class="table-wrap" style="margin-top:12px"><table class="table"><thead><tr><th>不在日</th><th>教員</th><th>時間帯</th><th>時間割サイクル</th><th></th></tr></thead><tbody>
+ ${all.map(a=>`<tr><td>${esc(a.date)}</td><td><strong>${esc(label(a.teacherId))}</strong></td><td>${seg(a.segment)}</td><td>${Number(a.week)+1}週</td><td><button class="btn small danger" data-action="removeWeeklyAbsence" data-id="${a.id}">削除</button></td></tr>`).join('')||'<tr><td colspan="5" class="muted">登録した不在条件はまだありません。</td></tr>'}</tbody></table></div>
+ </div>
+ <div style="height:12px"></div>
+ <div class="card"><h3>② 対象週の授業を一括再編成</h3>
+ <div class="form-grid">${field('対象週（月曜日始まり）',`<select id="weeklyTarget" data-action="weeklyTarget">${starts.map(d=>`<option value="${d}" ${selected===d?'selected':''}>${d} 〜 ${weekDates(d)[4]}（${registeredConditions(state,d).length}条件）</option>`).join('')}</select>`,'span7')}
+ <div class="field span5"><label>すべての不在を考慮</label><button class="btn primary" data-action="generateWeeklyPlan" ${busy||!selected?'disabled':''}>週の変更案を作成</button></div></div>
+ <div class="help" style="margin-top:8px">同じ学級の授業を別日と交換し、教員・教室の重複、不在時間帯、連続授業条件をチェックします。交換できなかった授業は未解決として表示し、確定できません。</div>
+ ${prev?`<div class="notice ${prev.result.ok?'ok':'warn'}" style="margin-top:12px"><strong>${prev.result.ok?'確定可能な変更案':'未解決の授業があります'}</strong>：対象授業${prev.result.originalAffected}コマ、移動${prev.result.changes.length}件、未解決${prev.result.unresolved.length}件、追加制約違反${prev.result.introduced.length}件。</div>
+ <div class="table-wrap" style="margin-top:10px"><table class="table"><thead><tr><th>教員・教科</th><th>学級</th><th>変更前</th><th>変更後</th></tr></thead><tbody>${prev.result.changes.map(c=>`<tr><td>${esc(c.teacherNames.join('・'))}<div class="help">${esc(c.subject)}</div></td><td>${esc(c.className)}</td><td>${DAYS[c.fromDay]}${c.fromPeriod+1}限</td><td><strong>${DAYS[c.toDay]}${c.toPeriod+1}限</strong></td></tr>`).join('')||'<tr><td colspan="4">自動変更された授業はありません。</td></tr>'}</tbody></table></div>
+ ${prev.result.unresolved.concat(prev.result.introduced).map(x=>`<div class="notice warn" style="margin-top:6px">${esc(x.text)}</div>`).join('')}
+ <div class="inline" style="margin-top:12px"><button class="btn primary" data-action="confirmWeeklyPlan" ${!prev.result.ok?'disabled':''}>この週の時間割を確定・保存</button><span class="help">確定すると、月〜金の臨時時間割を日付付きで保存します。授業実績は実施後に別途確定します。</span></div>`:''}
+ </div>
+ <div style="height:12px"></div>
+ ${card('③ 確定した週の時間割',`<div class="table-wrap"><table class="table"><thead><tr><th>対象週</th><th>登録条件</th><th>移動件数</th><th>確定日時</th><th></th></tr></thead><tbody>${finalized.map(p=>`<tr><td>${p.weekStart}〜${weekDates(p.weekStart)[4]}</td><td>${p.absences.length}件</td><td>${p.changes.length}件</td><td>${fmtTime(p.confirmedAt)}</td><td><button class="btn small" data-action="viewWeeklyPlan" data-id="${p.id}">内容を見る</button></td></tr>`).join('')||'<tr><td colspan="5">まだ確定していません。</td></tr>'}</tbody></table></div>`,'確定時の条件・変更内容・週の授業配置を保管します。確認済みの授業実績は変更しません。')}
+ `;
+}
 function renderOperations(){
-  const cache=absenceCache;return pageHead('10 臨時変更・授業実績','基本時間割を保持したまま、日別の時間割変更と実際に行った授業を管理します。')+
-  `<div class="grid cols2">${card('教員の出張・欠勤リプラン',`<div class="form-grid">${field('欠勤教員',`<select id="absenceTeacher">${state.resources.teachers.map(t=>`<option value="${t.id}">${esc(t.name)}</option>`).join('')}</select>`,'span5')}${field('サイクル週',`<select id="absenceWeek">${Array.from({length:state.timetable.cycleWeeks},(_,i)=>`<option value="${i}">${i+1}週</option>`).join('')}</select>`,'span3')}${field('曜日',`<select id="absenceDay">${DAYS.map((d,i)=>`<option value="${i}">${d}</option>`).join('')}</select>`,'span4')}${field('実施日（記録用）','<input type="date" id="absenceDate">','span5')}</div><div class="inline" style="margin-top:10px"><button class="btn primary" data-action="generateAbsence" ${busy?'disabled':''}>変更案を作成</button></div><div class="help" style="margin-top:8px">代替教員候補と、同一学級内の授業交換を探索して複数案を比較します。基本時間割は上書きしません。</div>`) }
-  ${card('臨時時間割',`<div class="inline"><button class="btn" data-action="createTemporary">＋ 基本時間割から作成</button></div><div class="table-wrap" style="margin-top:10px"><table class="table"><thead><tr><th>日付</th><th>名称</th><th>変更内容</th><th></th></tr></thead><tbody>${(state.operations.temporarySchedules||[]).map(x=>`<tr><td>${esc(x.date||'-')}</td><td>${esc(x.label)}</td><td>${esc((x.changes||[]).map(c=>c.text).join(' / ')||'基本時間割を複製')}</td><td><button class="btn small" data-action="viewTemporary" data-id="${x.id}">確認・変更</button> <button class="btn small blue" data-action="recordActual" data-id="${x.id}">実績入力</button> <button class="btn small danger" data-action="removeTemporary" data-id="${x.id}">削除</button></td></tr>`).join('')||'<tr><td colspan="4" class="muted">臨時時間割は未作成です。</td></tr>'}</tbody></table></div>`)}
-  </div>${renderActualDashboard()}${cache?`<div style="height:12px"></div>${renderAbsenceResults(cache)}`:''}`;
+ return pageHead('10 出張・欠勤と週次時間割','複数教員の不在条件を登録し、週の時間割をまとめて組み替えます。確定後、日別の授業実績に連動します。')+
+ renderWeeklyPanel()+
+ `<div style="height:12px"></div>`+
+ card('日別の臨時時間割',`<div class="inline"><button class="btn" data-action="createTemporary">＋ 手動で臨時時間割を作成</button></div>
+ <div class="table-wrap" style="margin-top:10px"><table class="table"><thead><tr><th>日付</th><th>内容</th><th>変更</th><th>操作</th></tr></thead><tbody>${(state.operations.temporarySchedules||[]).slice().sort((a,b)=>b.date.localeCompare(a.date)).map(x=>`<tr><td>${esc(x.date)}</td><td>${esc(x.label)}</td><td>${esc((x.changes||[]).map(c=>c.text).slice(0,2).join(' / '))}</td><td><button class="btn small" data-action="viewTemporary" data-id="${x.id}">確認・変更</button> <button class="btn small blue" data-action="recordActual" data-id="${x.id}">実績入力</button>${x.source==='weekly-replan'?'':` <button class="btn small danger" data-action="removeTemporary" data-id="${x.id}">削除</button>`}</td></tr>`).join('')||'<tr><td colspan="4">臨時時間割は未作成です。</td></tr>'}</tbody></table></div>`)+renderActualDashboard();
 }
 
 function renderActualDashboard(){
