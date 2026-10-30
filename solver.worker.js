@@ -287,6 +287,8 @@ function weeklyReplan(m,week,conditions){
    for(const p of unit.items){
     const item={...p,day:dest.day,period:p.period+off};
     const forDay=(adjusted.periodOverrides||[]).find(x=>x.lessonId===p.lessonId&&Number(x.week)===Number(targetWeek)&&x.day===dest.day);
+    // Do not turn a technology lesson into a home-economics lesson merely to fix a teacher absence.
+    if((p.periodAssignmentId||null)!==(forDay?.periodAssignmentId||null))return null;
     if(forDay){
      item.periodAssignmentId=forDay.periodAssignmentId;
      item.subjectOverride=forDay.subjectOverride;
