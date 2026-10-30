@@ -1,3 +1,4 @@
+import {actualComponentProgress} from './period-assignments.js';
 // Daily teaching records are snapshots. Never derive confirmed teaching
 // from the current repeating timetable once a day has been confirmed.
 export function dateWeekday(date){
@@ -22,7 +23,7 @@ export function actualDayRows(state,{date,week,placements}){
    if(byClassSlot.has(key))throw new Error(`${c.name}の${p.period+1}限に授業が複数あります。重複を解消してください`);
    const minutes=Number(state.school.lessonMinutes)||standardMinuteUnit(state,c.grade);
    const teachers=(p.teacherIdsOverride?.length?p.teacherIdsOverride:l.teacherIds)||[];
-   const item={id:date+'|'+classId+'|'+p.period,classId,className:c.name,grade:Number(c.grade),period:Number(p.period),subject:l.subject,lessonId:l.id,teacherIds:[...teachers],teacherNames:teachers.map(id=>state.resources.teachers.find(t=>t.id===id)?.name||id),minutes,status:'held',note:''};
+   const item={id:date+'|'+classId+'|'+p.period,classId,className:c.name,grade:Number(c.grade),period:Number(p.period),subject:p.subjectOverride||l.subject,baseSubject:l.subject,periodAssignmentId:p.periodAssignmentId||null,lessonId:l.id,teacherIds:[...teachers],teacherNames:teachers.map(id=>state.resources.teachers.find(t=>t.id===id)?.name||id),minutes,status:'held',note:''};
    byClassSlot.set(key,item);used.push(item);
   }
  }
@@ -72,12 +73,21 @@ export function subjectProgress(state,grade,classId){
  const plan=state.hourPlans.find(x=>Number(x.grade)===Number(grade));
  const subjects=new Set((plan?.subjects||[]).map(x=>x.name));
  for(const a of state.adjusted?.allocations||[])if(Number(a.grade)===Number(grade)&&a.kind!=='training'&&a.subject)subjects.add(a.subject);
- for(const x of totals)subjects.add(x.subject);
- return [...subjects].map(subject=>{
+ const allAssignments=(state.periodAssignments||[]).filter(x=>x.classId===classId);
+ const componentNames=new Set(allAssignments.map(x=>x.label));
+ for(const x of totals)if(!componentNames.has(x.subject))subjects.add(x.subject);
+ const rows=[];
+ for(const subject of subjects){
   const row=plan?.subjects?.find(x=>x.name===subject);
   const added=(state.adjusted?.allocations||[]).filter(x=>Number(x.grade)===Number(grade)&&x.kind!=='training'&&x.subject===subject).reduce((n,x)=>n+Math.max(0,Number(x.hours||0)),0);
   const target=Math.max(0,Number(row?.hours||0)+Number(row?.adjustment||0)+added);
-  const actual=have.get(subject);
-  return {subject,target,periods:actual?.periods||0,minutes:actual?.minutes||0,completed:actual?.standardUnits||0,remaining:Math.max(0,target-(actual?.standardUnits||0))};
- }).filter(x=>x.target>0||x.periods>0);
+  const components=actualComponentProgress(state,classId,subject);
+  const direct=have.get(subject);
+  const periods=(direct?.periods||0)+components.reduce((n,x)=>n+x.periods,0);
+  const minutes=(direct?.minutes||0)+components.reduce((n,x)=>n+x.minutes,0);
+  const completed=(direct?.standardUnits||0)+components.reduce((n,x)=>n+x.completed,0);
+  if(target>0||periods>0)rows.push({subject:components.length?subject+'（合計）':subject,baseSubject:subject,target,periods,minutes,completed,remaining:Math.max(0,target-completed),isGroup:components.length>0});
+  for(const c of components)rows.push({subject:'↳ '+c.label,baseSubject:subject,target:Number(c.targetHours||0),periods:c.periods,minutes:c.minutes,completed:c.completed,remaining:c.remaining,isComponent:true});
+ }
+ return rows;
 }
