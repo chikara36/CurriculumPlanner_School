@@ -1,5 +1,5 @@
-export const APP_VERSION='1.7.0';
-export const SCHEMA_VERSION=14;
+export const APP_VERSION='1.7.1';
+export const SCHEMA_VERSION=15;
 export const DAYS=['月','火','水','木','金'];
 
 export const DEFAULT_SUBJECTS_JHS=[
@@ -189,10 +189,10 @@ export function defaultState(){
     school:{code:'',name:'〇〇中学校',type:'junior_high',principal:'',fiscalYear:fy,termSystem:3,lessonMinutes:50,notes:''},
     goals:{educationGoal:'',focusItems:[{id:'focus_inquiry',label:'探究的な学び',text:''},{id:'focus_individual',label:'個別最適・協働的な学び',text:''},{id:'focus_support',label:'特別支援教育',text:''},{id:'focus_career',label:'キャリア教育',text:''}],featureTags:[],featureSummary:''},
     calendar:{holidayRuleVersion:'JP-HOLIDAY-2026.10',terms:[{id:'t1',name:'1学期',start:`${fy}-04-06`,end:`${fy}-07-20`},{id:'t2',name:'2学期',start:`${fy}-09-01`,end:`${fy}-12-23`},{id:'t3',name:'3学期',start:`${fy+1}-01-08`,end:`${fy+1}-03-24`}],exceptions:[],events:[{id:uid('ev'),date:`${fy}-04-06`,name:'始業式',category:'儀式的行事',countsAsInstruction:true},{id:uid('ev'),date:`${fy}-04-07`,name:'入学式',category:'儀式的行事',countsAsInstruction:true},{id:uid('ev'),date:`${fy}-09-25`,name:'体育大会',category:'体育的行事',countsAsInstruction:true},{id:uid('ev'),date:`${fy+1}-03-24`,name:'修了式',category:'儀式的行事',countsAsInstruction:true}]},
-    instruction:{manualWeeklyTarget:false,weeklyTargetOverride:null,cycleWeeks:2,maxPeriods:6,dailyPatternMode:'auto'},hourPlans:p.hourPlans,
+    instruction:{manualWeeklyTarget:false,weeklyTargetOverride:null,cycleWeeks:1,maxPeriods:6,dailyPatternMode:'auto'},hourPlans:p.hourPlans,
     adjusted:{enabled:false,rules:{maxReductionRate:.15,minHours:35,excludeAtOrBelow:35},allocations:[]},integrated:{plans:[{id:uid('int'),grade:1,title:'地域課題をテーマにした探究',hours:50,linkedEventIds:[]}]},masters:p.masters,periods:p.periods,
     resources:{classes:p.classes,teachers:p.teachers,facilities:p.facilities},lessons:p.lessons,
-    timetable:{cycleWeeks:2,placements:[],view:{kind:'class',id:'c11',week:0},settings:{studentNoGaps:true,avoidSameSubjectTwice:true,avoidLastPE:true,restarts:24,repairDepth:2},lastResult:null,undo:[],redo:[]},
+    timetable:{cycleWeeks:1,placements:[],view:{kind:'class',id:'c11',week:0},settings:{studentNoGaps:true,avoidSameSubjectTwice:true,avoidLastPE:true,restarts:24,repairDepth:2},lastResult:null,undo:[],redo:[]},
     operations:{absences:[],temporarySchedules:[],actualDays:[],weeklyPlans:[]},drive:{clientId:'',folderName:'CurriculumPlanner',fileId:'',folderId:'',lastSyncAt:null,autoSync:false},ui:{page:'basic',scheduleTab:'board',resourceTab:'classes',reportType:'summary'}};
 }
 
@@ -206,6 +206,15 @@ export function migrateState(raw){
   st.lessons.forEach(l=>{l.unavailable=Array.isArray(l.unavailable)?l.unavailable:[];l.preferred=Array.isArray(l.preferred)?l.preferred:[];l.blockSize=Math.max(1,Math.min(3,Number(l.blockSize||1)))});st.timetable.undo=[];st.timetable.redo=[];st.operations={...base.operations,...(raw.operations||{})};st.operations.actualDays=Array.isArray(st.operations.actualDays)?st.operations.actualDays:[];st.operations.absences=Array.isArray(st.operations.absences)?st.operations.absences:[];st.operations.weeklyPlans=Array.isArray(st.operations.weeklyPlans)?st.operations.weeklyPlans:[];st.drive={...base.drive,...(raw.drive||{})};st.ui={...base.ui,...(raw.ui||{})};normalizeResources(st);
   if(oldSchema<5&&st.school.type==='elementary'&&(!Array.isArray(raw.hourPlans)||raw.hourPlans.length<=3))applySchoolTypeDefaults(st,'elementary');
   if(oldSchema<6){const mixedElementary=st.school.type==='elementary'&&st.hourPlans.length!==6;const mixedJhs=st.school.type==='junior_high'&&st.hourPlans.length!==3;if(mixedElementary||mixedJhs)applySchoolTypeDefaults(st,st.school.type);}
+  if(oldSchema<15&&Number(st.timetable.cycleWeeks)===2
+     &&!(st.timetable.placements||[]).length
+     &&!(st.operations.weeklyPlans||[]).length
+     &&!(st.operations.temporarySchedules||[]).length
+     &&!(st.operations.absences||[]).length
+     &&!(st.lessons||[]).some(l=>l.cycleSessionsOverride!==null&&l.cycleSessionsOverride!==undefined&&l.cycleSessionsOverride!=='')){
+       st.timetable.cycleWeeks=1;st.instruction.cycleWeeks=1;
+       if(st.timetable.view)st.timetable.view.week=0;
+  }
   if(oldSchema<7)for(const l of st.lessons)l.blockSize=Math.max(1,Math.min(3,Number(l.blockSize||1)));
   if(oldSchema<8){
     const subjectNames=new Set(st.masters.subjects.map(x=>x.name));
