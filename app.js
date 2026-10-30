@@ -6,6 +6,7 @@ import {saveToDrive,loadFromDrive} from './drive.js';
 import {reportByType} from './reports.js';
 import {dateWeekday,actualDayRows,saveActualDay,subjectProgress} from './actuals.js';
 import {mondayFor,weekDates,registeredConditions,validateAbsence,absenceAt,weekHasActuals,weeklyTemporarySchedules,weeklyConditionsMatch} from './weekly.js';
+import {periodAssignmentIssues,periodAllocationSummary,resolveDatedPlacements,actualComponentProgress} from './period-assignments.js';
 
 const NAV=[
   ['basic','01','基本情報'],['goals','02','教育目標・重点'],['calendar','03','年間カレンダー'],['days','04','授業日数・週時数'],
@@ -155,9 +156,9 @@ function renderPeriods(){
 
 function renderResources(){
   const tab=state.ui.resourceTab||'classes';
-  const tabs=[['classes','学級'],['teachers','教員'],['assignments','担当割当'],['masters','教科・役割マスタ'],['facilities','教室・施設'],['lessons','授業設定']];
+  const tabs=[['classes','学級'],['teachers','教員'],['assignments','担当割当'],['masters','教科・役割マスタ'],['facilities','教室・施設'],['lessons','授業設定'],['periods','期間別配当']];
   let body='';
-  if(tab==='classes')body=renderClasses();if(tab==='teachers')body=renderTeachers();if(tab==='assignments')body=renderAssignments();if(tab==='masters')body=renderMasters();if(tab==='facilities')body=renderFacilities();if(tab==='lessons')body=renderLessons();
+  if(tab==='classes')body=renderClasses();if(tab==='teachers')body=renderTeachers();if(tab==='assignments')body=renderAssignments();if(tab==='masters')body=renderMasters();if(tab==='facilities')body=renderFacilities();if(tab==='lessons')body=renderLessons();if(tab==='periods')body=renderPeriodAssignments();
   return pageHead('08 時間割データ','学級・教員・担当クラス・教科マスタ・校務分掌マスタ・施設・授業を設定します。複数教科・複数役割にも対応します。')+
   `<div class="inline" style="margin-bottom:10px"><button class="btn blue" data-action="syncCurriculumLessons">学級・教科と授業を同期</button><span class="help">不足している学級別授業を生成し、現在の時数に合わせます。担当教員と既存の配置は保持します。</span></div><div class="tabs">${tabs.map(([id,l])=>`<button class="${tab===id?'active':''}" data-action="resourceTab" data-tab="${id}">${l}</button>`).join('')}</div>${body}`;
 }
@@ -175,6 +176,51 @@ function renderLessons(){
   const stats=calendarStats(state);return card('授業設定',`<div class="toolbar"><button class="btn primary" data-action="addLesson">＋ 授業を追加</button><button class="btn" data-action="exportLessonCsv">CSV出力</button><button class="btn" data-action="importLessonCsv">CSV読込</button><span class="muted">年間時数からサイクル必要コマ数を自動算出</span></div><div class="table-wrap"><table class="table"><thead><tr><th>授業</th><th>学級</th><th>担当</th><th>施設</th><th>形態</th><th>連続</th><th>年間</th><th>${state.timetable.cycleWeeks}週必要</th><th>同時展開</th><th></th></tr></thead><tbody>${state.lessons.map(l=>`<tr><td><strong>${esc(l.subject)}</strong></td><td>${esc((l.classIds||[]).map(id=>classById(state,id)?.name||id).join('・'))}</td><td>${esc((l.teacherIds||[]).filter(Boolean).map(id=>teacherById(state,id)?.name||id).join('・')||'未定')}</td><td>${esc(facilityById(state,l.facilityId)?.name||l.facilityId||'未定')}</td><td>${esc(l.type)}</td><td>${Number(l.blockSize||1)>1?`<span class="badge info">${Number(l.blockSize)}コマ連続</span>`:'1コマ'}</td><td class="num">${n(l.annualHours)}</td><td class="num"><strong>${cycleSessionsForLesson(state,l,stats.instructionDays)}</strong></td><td>${esc(l.syncGroup||'-')}</td><td><button class="btn small" data-action="editLesson" data-id="${l.id}">編集</button> <button class="btn small danger" data-action="removeLesson" data-id="${l.id}">削除</button></td></tr>`).join('')}</tbody></table></div>`,'通常授業のほか、TT・合同・選択・展開・通級等を複数教員／複数学級／同時展開グループで表現できます。')
 }
 
+
+function renderPeriodAssignments(){
+ const cls=classById(state,state.ui.periodClassId)||state.resources.classes[0];
+ const all=(state.periodAssignments||[]).filter(x=>x.classId===cls?.id).slice().sort((a,b)=>a.startDate.localeCompare(b.startDate));
+ const bases=[...new Set(all.map(x=>x.baseSubject))];
+ const distinct=[...new Set(bases.concat('技術・家庭'))].filter(name=>state.hourPlans.find(h=>Number(h.grade)===Number(cls?.grade))?.subjects?.some(s=>s.name===name));
+ const rows=distinct.map(name=>{
+  const summary=periodAllocationSummary(state,cls.id,name);if(!summary.entries.length)return '';
+  return `<div class="inline"><strong>${esc(name)}</strong><span class="chip ${Math.abs(summary.remaining)<0.001?'ok':'warn'}">内訳配当 ${summary.allocated} / 年間 ${summary.target} 単位時間</span></div>`;
+ }).join('');
+ return card('期間別の授業・担当教員',`
+  <div class="notice info"><strong>基本時間割は毎週同じ枠を使用します。</strong> 例えば技術・家庭を毎週1コマとし、4月〜9月を「技術分野・A先生」、10月〜3月を「家庭分野・B先生」に切り替えられます。年間35コマの内訳を18・17など学校で設定してください。技術・家庭という親教科の年間時数は増えません。</div>
+  <div class="inline" style="margin-top:12px;align-items:center"><strong>設定学級</strong><select data-action="periodClassSelector" id="periodClassSelector">${state.resources.classes.map(c=>`<option value="${c.id}" ${c.id===cls?.id?'selected':''}>${esc(c.name)}</option>`).join('')}</select><button class="btn primary" data-action="addPeriodAssignment">＋ 期間別配当を追加</button></div>
+  <div style="margin-top:12px">${rows}</div>
+  <div class="table-wrap" style="margin-top:10px"><table class="table"><thead><tr><th>基本教科</th><th>実施期間</th><th>実施内容</th><th>担当</th><th>教室</th><th>年間配当</th><th>実績</th><th>操作</th></tr></thead><tbody>${all.map(x=>{
+    const used=actualComponentProgress(state,x.classId,x.baseSubject).find(a=>a.id===x.id);
+    return `<tr><td>${esc(x.baseSubject)}</td><td style="white-space:nowrap">${esc(x.startDate)}〜<wbr>${esc(x.endDate)}</td><td><strong>${esc(x.label)}</strong></td><td>${esc(teacherById(state,x.teacherId)?.name||'基本担当')}</td><td>${esc(facilityById(state,x.facilityId)?.name||'基本教室')}</td><td class="num">${Number(x.targetHours||0)}</td><td class="num">${(used?.completed||0).toFixed(2)}</td><td><button class="btn small" data-action="editPeriodAssignment" data-id="${x.id}">編集</button> <button class="btn small danger" data-action="removePeriodAssignment" data-id="${x.id}">削除</button></td></tr>`;
+   }).join('')||'<tr><td colspan="8">期間別配当はありません。年間通じて基本の教科・担当で授業を行います。</td></tr>'}</tbody></table></div>
+  <div class="help" style="margin-top:8px">同一学級・基本教科の期間は重複登録できません。分野の配当合計が基本教科の年間時数を超える場合は保存できません。過去に確定した実績は変更されません。</div>
+ `);
+}
+function showPeriodAssignmentModal(id=null){
+ const existing=(state.periodAssignments||[]).find(x=>x.id===id);
+ const cl=classById(state,existing?.classId||state.ui.periodClassId)||state.resources.classes[0];
+ if(!cl)return toast('先に学級を登録してください','warn');
+ const plan=state.hourPlans.find(p=>Number(p.grade)===Number(cl.grade));
+ const subjects=(plan?.subjects||[]).filter(x=>Number(x.hours||0)>0);
+ const subject=existing?.baseSubject|| (subjects.some(x=>x.name==='技術・家庭')?'技術・家庭':subjects[0]?.name||'');
+ const fiscal=Number(state.school.fiscalYear||new Date().getFullYear());
+ const terms=state.calendar.terms||[];
+ const start=terms[0]?.start||fiscal+'-04-01',end=terms.at(-1)?.end||(fiscal+1)+'-03-31';
+ const x=existing||{id:'',classId:cl.id,baseSubject:subject,label:subject==='技術・家庭'?'技術分野':'',teacherId:'',facilityId:'',targetHours:0,startDate:start,endDate:end};
+ const opts=(arr,selected)=>arr.map(([key,label])=>`<option value="${attr(key)}" ${key===selected?'selected':''}>${esc(label)}</option>`).join('');
+ openModal(existing?'期間別配当を編集':'期間別配当を追加',`<div class="form-grid">
+ ${field('学級',`<input value="${attr(cl.name)}" disabled>`,'span3')}
+ ${field('基本教科',`<select id="periodBaseSubject">${opts(subjects.map(s=>[s.name,s.name]),x.baseSubject)}</select>`,'span3')}
+ ${field('実施内容・分野名',`<input id="periodLabel" value="${attr(x.label)}" placeholder="技術分野・家庭分野など">`,'span3')}
+ ${field('年間配当（標準単位時間）',`<input id="periodTarget" type="number" min="0" max="140" step="0.5" value="${Number(x.targetHours||0)}">`,'span3')}
+ ${field('開始日',`<input id="periodStart" type="date" value="${attr(x.startDate)}">`,'span3')}
+ ${field('終了日',`<input id="periodEnd" type="date" value="${attr(x.endDate)}">`,'span3')}
+ ${field('期間中の担当教員',`<select id="periodTeacher">${opts([['','基本担当を使用'],...state.resources.teachers.map(t=>[t.id,t.name])],x.teacherId)}</select>`,'span3')}
+ ${field('期間中の教室',`<select id="periodFacility">${opts([['','基本教室を使用'],...state.resources.facilities.map(f=>[f.id,f.name])],x.facilityId)}</select>`,'span3')}
+ </div><div class="notice info" style="margin-top:10px">期間の指定で授業の中身・担当・教室を変えます。期間別の配当時数は年間の目標であり、期間中の授業を自動的に追加・削除しません。実際の授業時数はSTEP10で確定した実績から計算します。</div>`,
+ `<button class="btn" data-action="closeModal">キャンセル</button><button class="btn primary" data-action="savePeriodAssignment" data-id="${attr(x.id)}" data-class-id="${attr(cl.id)}">保存</button>`);
+}
 function renderTimetable(){
   const model=buildSolverModel(state),view=state.timetable.view||{kind:'class',id:state.resources.classes[0]?.id,week:0};
   if(view.week>=state.timetable.cycleWeeks)view.week=0;
