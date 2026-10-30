@@ -70,8 +70,47 @@ try{
  await page.locator('[data-action="teacherMaster"]').first().click();
  assert((await page.locator('input[name="teacherMasterRoles"]:checked').count())>=1,'saved roles must persist');
  await page.locator('[data-action="closeModal"]').last().click();
+ // Seed a single Friday lesson through the same IndexedDB API used in production.
+ const seed=await page.evaluate(async()=>{
+  const {defaultState}=await import('./model.js'),{saveState}=await import('./storage.js');
+  const st=defaultState(),lesson=st.lessons.find(x=>x.classIds.includes('c11')&&x.subject==='理科');
+  st.school.lessonMinutes=45;st.timetable.placements=[{id:'seed_p',lessonId:lesson.id,week:0,day:4,period:0,locked:false}];
+  await saveState(st);return {lessonId:lesson.id,otherId:st.lessons.find(x=>x.classIds.includes('c11')&&x.subject==='数学').id};
+ });
+ await page.reload({waitUntil:'domcontentloaded'});
+ await page.locator('[data-nav="operations"]').click();
+ await page.locator('#actualBaseDate').fill('2026-10-30');
+ await page.locator('#actualBaseWeek').selectOption('0');
+ await page.locator('[data-action="recordBaseActual"]').click();
+ await page.locator('[data-action="saveActualDay"]').waitFor();
+ assert((await page.locator('.modal-backdrop').innerText()).includes('理科'));
+ await page.locator('[data-action="saveActualDay"]').click();
+ await page.locator('[data-action="reviseActual"]').waitFor();
+ let totals=await page.evaluate(async()=>{const {loadState}=await import('./storage.js'),{actualTotals}=await import('./actuals.js');return actualTotals(await loadState())});
+ assert.equal(totals.length,1);
+ assert.equal(totals[0].standardUnits,0.9);
+ await page.locator('[data-action="reviseActual"]').click();
+ await page.locator('[data-actual-status="0"]').selectOption('cancelled');
+ page.once('dialog',dialog=>dialog.accept());
+ await page.locator('[data-action="saveActualDay"]').click();
+ totals=await page.evaluate(async()=>{const {loadState}=await import('./storage.js'),{actualTotals}=await import('./actuals.js');return actualTotals(await loadState())});
+ assert.equal(totals.length,0,'cancelled teaching must not earn hours');
+ const audit=await page.evaluate(async()=>{const {loadState}=await import('./storage.js');return (await loadState()).operations.actualDays[0]});
+ assert.equal(audit.history.length,1,'corrected hours must preserve the previous snapshot');
+ await page.locator('[data-action="createTemporary"]').click();
+ await page.locator('#tmpDate').fill('2026-10-30');
+ await page.locator('#tmpLabel').fill('出張に伴う変更');
+ await page.locator('[data-action="saveTemporary"]').click();
+ await page.locator('[data-action="viewTemporary"]').first().click();
+ await page.locator('#tmpReplaceClass').selectOption('c11');
+ await page.locator('#tmpReplaceSlot').selectOption('4-0');
+ await page.locator('#tmpReplaceLesson').selectOption(seed.otherId);
+ await page.locator('[data-action="tempReplaceLesson"]').click();
+ await page.locator('.modal-backdrop').waitFor();
+ assert((await page.locator('.modal-backdrop').innerText()).includes('数学'),'replacement subject should appear in changed schedule');
+ await page.locator('[data-action="closeModal"]').last().click();
  assert.deepEqual(errors,[],'browser errors: '+errors.join('; '));
- console.log('Real Chrome E2E passed: startup, teacher modal, class creation, fixed table, cancelled school switch, persistence.');
+ console.log('Real Chrome E2E passed: startup, settings, persistence, actuals confirmation/correction and dated replacement.');
 }catch(err){
  if(page){await fs.mkdir(path.join(base,'artifacts'),{recursive:true});await page.screenshot({path:path.join(base,'artifacts','browser-failure.png')}).catch(()=>{})}
  throw err;
