@@ -25,6 +25,9 @@ jobs:
       - name: Daily teaching actuals regression
         run: node tests/actuals.mjs
 
+      - name: Weekly multi-teacher replan tests
+        run: node tests/weekly.mjs
+
       - name: Startup smoke test
         run: node tests/startup-smoke.mjs
 
