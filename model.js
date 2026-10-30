@@ -179,7 +179,8 @@ function profileParts(type){
 export function applySchoolTypeDefaults(st,type){
   const p=profileParts(type);st.school.type=p.type;st.school.lessonMinutes=p.lessonMinutes;st.hourPlans=p.hourPlans;st.resources={classes:p.classes,teachers:p.teachers,facilities:p.facilities};st.periods=p.periods;st.lessons=p.lessons;st.masters=p.masters;
   st.integrated={plans:p.type==='elementary'?[{id:uid('int'),grade:3,title:'',hours:70,linkedEventIds:[]}]:[{id:uid('int'),grade:1,title:'',hours:50,linkedEventIds:[]}]};
-  st.timetable={...(st.timetable||{}),placements:[],view:{kind:'class',id:p.classes[0]?.id||'',week:0},undo:[],redo:[],lastResult:null};
+  st.instruction={...(st.instruction||{}),cycleWeeks:1};
+  st.timetable={...(st.timetable||{}),cycleWeeks:1,placements:[],view:{kind:'class',id:p.classes[0]?.id||'',week:0},undo:[],redo:[],lastResult:null};
   st.operations={absences:[],temporarySchedules:[],actualDays:[],weeklyPlans:[]};st.updatedAt=new Date().toISOString();return st;
 }
 
