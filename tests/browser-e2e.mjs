@@ -186,6 +186,68 @@ try{
  assert.equal(weekSaved.p.placements.find(p=>p.id==='weekA').day,1,'A teacher receives another day');
  assert.equal(weekSaved.p.placements.find(p=>p.id==='weekB').day,0,'B teacher receives the other day');
  assert((await page.locator('[data-action="recordActual"]').count())>=5);
+
+ // One common weekly slot; period-specific technology/home contents and teachers.
+ const pseed=await page.evaluate(async()=>{
+   const {defaultState}=await import('./model.js'),{saveState}=await import('./storage.js');
+   const st=defaultState(),c=st.resources.classes.find(x=>x.grade===3);
+   const tech=st.lessons.find(x=>x.subject==='技術・家庭'&&x.classIds.length===1&&x.classIds[0]===c.id);
+   st.timetable.placements=[{id:'tech_once',lessonId:tech.id,week:0,day:4,period:0,locked:false}];
+   await saveState(st);
+   return {classId:c.id,lessonId:tech.id,teacherIds:st.resources.teachers.slice(0,2).map(t=>t.id)};
+ });
+ await page.reload({waitUntil:'domcontentloaded'});
+ await page.locator('[data-nav="resources"]').click();
+ await page.locator('[data-action="resourceTab"][data-tab="periods"]').click();
+ await page.locator('#periodClassSelector').selectOption(pseed.classId);
+ await page.locator('[data-action="addPeriodAssignment"]').click();
+ await page.locator('#periodBaseSubject').selectOption('技術・家庭');
+ await page.locator('#periodLabel').fill('技術分野');
+ await page.locator('#periodStart').fill('2026-04-01');
+ await page.locator('#periodEnd').fill('2026-10-29');
+ await page.locator('#periodTarget').fill('18');
+ await page.locator('#periodTeacher').selectOption(pseed.teacherIds[0]);
+ await page.locator('[data-action="savePeriodAssignment"]').click();
+ assert.equal(await page.locator('.modal-backdrop').count(),0,'first period must save');
+ await page.locator('[data-action="addPeriodAssignment"]').click();
+ await page.locator('#periodBaseSubject').selectOption('技術・家庭');
+ await page.locator('#periodLabel').fill('家庭分野');
+ await page.locator('#periodStart').fill('2026-10-30');
+ await page.locator('#periodEnd').fill('2027-03-31');
+ await page.locator('#periodTarget').fill('17');
+ await page.locator('#periodTeacher').selectOption(pseed.teacherIds[1]);
+ await page.locator('[data-action="savePeriodAssignment"]').click();
+ assert.equal(await page.locator('.modal-backdrop').count(),0,'second period must save');
+ await page.waitForFunction(()=>document.querySelector('#saveChip')?.textContent==='端末に保存済み',{timeout:5000});
+ const periodProof=await page.evaluate(async()=>{
+   const {loadState}=await import('./storage.js');
+   const {resolvePeriodPlacement,periodAllocationSummary}=await import('./period-assignments.js');
+   const st=await loadState(),p=st.timetable.placements[0];
+   return {before:resolvePeriodPlacement(st,'2026-10-29',p),after:resolvePeriodPlacement(st,'2026-10-30',p),summary:periodAllocationSummary(st,'c31','技術・家庭')};
+ });
+ assert.equal(periodProof.before.subjectOverride,'技術分野');
+ assert.equal(periodProof.after.subjectOverride,'家庭分野');
+ assert.equal(periodProof.summary.allocated,35);
+ await page.locator('[data-nav="operations"]').click();
+ await page.locator('#actualBaseDate').fill('2026-10-30');
+ await page.locator('[data-action="recordBaseActual"]').click();
+ assert((await page.locator('.modal-backdrop').innerText()).includes('家庭分野'),'Friday must resolve to second subject');
+ await page.locator('[data-action="saveActualDay"]').click();
+ await page.waitForFunction(()=>document.querySelector('#saveChip')?.textContent==='端末に保存済み',{timeout:5000});
+ const periodActual=await page.evaluate(async()=>{
+   const {loadState}=await import('./storage.js');
+   const {subjectProgress}=await import('./actuals.js');
+   const st=await loadState();
+   return {record:st.operations.actualDays[0].rows[0],progress:subjectProgress(st,3,'c31')};
+ });
+ assert.equal(periodActual.record.subject,'家庭分野');
+ assert.equal(periodActual.record.teacherIds[0],pseed.teacherIds[1]);
+ assert.equal(periodActual.progress.find(x=>x.isGroup&&x.baseSubject==='技術・家庭').completed,1);
+ assert.equal(periodActual.progress.find(x=>x.isComponent&&x.subject.includes('家庭')).completed,1);
+ await page.locator('[data-nav="reports"]').click();
+ await page.locator('#reportType').selectOption('periodAllocations');
+ assert((await page.locator('#reportPreview').innerText()).includes('技術分野'));
+ assert((await page.locator('#reportPreview').innerText()).includes('家庭分野'));
  assert.deepEqual(errors,[],'browser errors: '+errors.join('; '));
  console.log('Real Chrome E2E passed: startup, settings, persistence, actuals confirmation/correction and dated replacement.');
 }catch(err){
