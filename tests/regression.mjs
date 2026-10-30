@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import {defaultState,migrateState,cycleSessionsForLesson} from '../model.js';
 import {weeklyTargetForGrade} from '../calendar.js';
 const st=defaultState(),grade=1;
-assert.equal(st.schemaVersion,13);
+assert.equal(st.schemaVersion,14);
 assert(st.masters.subjects.some(x=>x.name==='理科'));
 assert(st.masters.roles.some(x=>x.name==='教務'));
 const stats={weeks:40,instructionDays:200};
