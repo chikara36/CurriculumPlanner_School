@@ -54,5 +54,15 @@ export function actualsReport(state){
  html+='</table><p>出張や欠勤による変更は臨時時間割と分けて保存します。実施済みとして確定した授業のみ集計し、訂正前の内容は保存データに履歴を保持します。</p>';
  return wrap(state,'授業実績・年間時数進捗',html);
 }
-export function reportByType(state,type,opts={}){if(type==='actuals')return actualsReport(state);if(type==='calendar')return calendarReport(state);if(type==='hours')return hoursReport(state);if(type==='timetable')return timetableReport(state,opts.kind,opts.id);if(type==='teachers')return teacherScheduleReport(state);if(type==='facilities')return facilityScheduleReport(state);return summaryReport(state)}
+
+export function periodAssignmentsReport(state){
+ let html='<p>基本時間割は1週間固定とし、日付範囲により実施分野・担当者・使用施設を切り替えます。分野別配当は親教科の内数です。</p>';
+ html+='<table class="report-table"><tr><th>学級</th><th>基本教科</th><th>期間</th><th>分野・授業内容</th><th>担当教員</th><th>使用教室</th><th>年間配当</th></tr>';
+ for(const x of state.periodAssignments||[]){
+  html+=`<tr><td>${esc(classById(state,x.classId)?.name||x.classId)}</td><td>${esc(x.baseSubject)}</td><td>${esc(x.startDate)}〜${esc(x.endDate)}</td><td>${esc(x.label)}</td><td>${esc(teacherById(state,x.teacherId)?.name||'基本担当')}</td><td>${esc(facilityById(state,x.facilityId)?.name||'基本教室')}</td><td>${x.targetHours}</td></tr>`;
+ }
+ html+='</table>';
+ return wrap(state,'期間別の授業・担当配当',html);
+}
+export function reportByType(state,type,opts={}){if(type==='actuals')return actualsReport(state);if(type==='periodAllocations')return periodAssignmentsReport(state);if(type==='calendar')return calendarReport(state);if(type==='hours')return hoursReport(state);if(type==='timetable')return timetableReport(state,opts.kind,opts.id);if(type==='teachers')return teacherScheduleReport(state);if(type==='facilities')return facilityScheduleReport(state);return summaryReport(state)}
 function wrap(state,title,body){return `<div class="report-sheet"><div class="report-title">${esc(title)}</div><div class="report-meta"><span>${esc(state.school.name)}</span><span>${state.school.fiscalYear}年度</span></div>${body}</div>`}
