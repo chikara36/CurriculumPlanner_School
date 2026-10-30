@@ -552,7 +552,7 @@ const originalBindGlobal=bindGlobal;
 // The main init calls bindGlobal once; attach the modal listener here after DOM availability.
 queueMicrotask(()=>document.body.addEventListener('click',async e=>{
   const b=e.target.closest('[data-action]');if(!b)return;const a=b.dataset.action;try{
-    if(['saveCalendarException','saveEvent','saveIntegratedLinks','addTeacherLeave','deleteTeacherLeave','saveTeacherConstraints','saveFacilityConstraints','saveLesson','saveTemporary','tempSwap','tempRemoveSlot','tempRemoveShift'].includes(a)){await handleSecondaryClick(e);return}
+    if(['saveCalendarException','saveEvent','saveIntegratedLinks','addTeacherLeave','deleteTeacherLeave','saveTeacherConstraints','saveFacilityConstraints','saveLesson','saveTemporary','saveActualDay','tempReplaceLesson','tempSwap','tempRemoveSlot','tempRemoveShift'].includes(a)){await handleSecondaryClick(e);return}
     if(a==='doImportJson'){await importJsonFile();return}
     if(a==='doImportLessonCsv'){await importLessonCsv();return}
     if(a==='printReport'){e.stopImmediatePropagation();printCurrentReport();return}
