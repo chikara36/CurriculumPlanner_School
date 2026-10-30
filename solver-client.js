@@ -22,3 +22,6 @@ export async function scheduleMetrics(state){return call('metrics',{model:buildS
 export async function movePlacement(state,placementId,target){return call('move',{model:buildSolverModel(state),placementId,target})}
 export async function placeLesson(state,lessonId,target){return call('place',{model:buildSolverModel(state),lessonId,target})}
 export async function absenceProposals(state,teacherId,week,day){return call('absence',{model:buildSolverModel(state),teacherId,week,day})}
+
+// Rebalance a specific calendar week with all registered teacher absences at once.
+export async function replanTeacherWeek(state,week,conditions){return call('weeklyReplan',{model:buildSolverModel(state),week,conditions})}
