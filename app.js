@@ -256,8 +256,9 @@ function renderWeeklyPanel(){
 }
 
 async function generateWeeklyPlan(){
- const start=state.ui.weeklyStart;
+ const start=$('#weeklyTarget')?.value||state.ui.weeklyStart;
  if(!start)return toast('不在条件を登録して対象週を選択してください','warn');
+ state.ui.weeklyStart=start;
  if(!(state.timetable.placements||[]).length)return toast('STEP09で基本時間割を編成してから実施してください','warn');
  const conditions=registeredConditions(state,start);
  if(!conditions.length)return toast('この週の不在条件がありません','warn');
