@@ -45,7 +45,7 @@ assert.equal(solved.changes.length,2);
 assert.equal(solved.placements.find(p=>p.id==='pA').day,1);
 assert.equal(solved.placements.find(p=>p.id==='pB').day,0);
 assert.deepEqual(m.placements,[a,b],'base timetable must be untouched');
-const confirmed={id:'w1',weekStart:monday,week:0,placements:solved.placements,changes:solved.changes,confirmedAt:'2026-11-01T12:00:00.000Z'};
+const confirmed={id:'w1',weekStart:monday,week:0,absences:[condA,condB],placements:solved.placements,changes:solved.changes,confirmedAt:'2026-11-01T12:00:00.000Z'};
 const snapshots=weeklyTemporarySchedules(confirmed);
 assert.equal(snapshots.length,5);
 assert.deepEqual(snapshots.map(x=>x.date),weekDates(monday));
