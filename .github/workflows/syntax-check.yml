@@ -28,6 +28,9 @@ jobs:
       - name: Weekly multi-teacher replan tests
         run: node tests/weekly.mjs
 
+      - name: Period specific subject assignments tests
+        run: node tests/period-assignments.mjs
+
       - name: Startup smoke test
         run: node tests/startup-smoke.mjs
 
