@@ -114,6 +114,7 @@ try{
  await page.locator('#tmpReplaceLesson').selectOption(seed.otherId);
  await page.locator('[data-action="tempReplaceLesson"]').click();
  await page.locator('.modal-backdrop').waitFor();
+ await page.waitForFunction(()=>document.querySelector('#saveChip')?.textContent==='端末に保存済み',{timeout:5000});
  const changed=await page.evaluate(async()=>{
   const {loadState}=await import('./storage.js');
   const list=(await loadState()).operations.temporarySchedules;
