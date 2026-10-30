@@ -73,4 +73,9 @@ activeOld.timetable.placements=[{id:'oldPlacement',lessonId:activeOld.lessons[0]
 const migratedActive=migrateState(activeOld);
 assert.equal(migratedActive.timetable.cycleWeeks,2,'existing two-week placement must remain untouched');
 assert.equal(migratedActive.timetable.placements[0].week,1);
+const {applySchoolTypeDefaults}=await import('../model.js');
+const changedSchool=defaultState();changedSchool.timetable.cycleWeeks=2;changedSchool.instruction.cycleWeeks=2;
+applySchoolTypeDefaults(changedSchool,'elementary');
+assert.equal(changedSchool.timetable.cycleWeeks,1,'switching school type should use a uniform weekly timetable');
+assert.equal(changedSchool.instruction.cycleWeeks,1);
 console.log('Single-week default and safe migration regression passed');
