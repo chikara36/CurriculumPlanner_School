@@ -1,0 +1,37 @@
+import assert from 'node:assert/strict';
+import {defaultState,migrateState} from '../model.js';
+import {actualDayRows,saveActualDay,actualTotals,subjectProgress,dateWeekday} from '../actuals.js';
+const st=defaultState();
+st.school.lessonMinutes=45; // middle school short periods: 0.9 standard units each
+const date='2026-10-30',week=0,day=dateWeekday(date);
+assert.equal(day,4);assert.equal(dateWeekday('2026-10-31'),5);
+const lesson=st.lessons.find(l=>l.classIds.includes('c11')&&l.subject==='理科');
+assert(lesson);
+const placement={id:'p1',lessonId:lesson.id,week,day,period:0,locked:false};
+const rows=actualDayRows(st,{date,week,placements:[placement]});
+assert.equal(rows.length,1);assert.equal(rows[0].subject,'理科');
+assert.equal(rows[0].minutes,45);
+saveActualDay(st,{date,week,rows,sourceName:'出張対応'});
+assert.equal(actualTotals(st)[0].standardUnits,0.9);
+const progress=subjectProgress(st,1,'c11');
+assert.equal(progress.find(x=>x.subject==='理科').completed,0.9);
+assert.throws(()=>saveActualDay(st,{date,week,rows}),/確定済み/);
+const corrected=structuredClone(rows);corrected[0].status='cancelled';
+saveActualDay(st,{date,week,rows:corrected,allowCorrection:true});
+assert.equal(actualTotals(st).length,0);
+assert.equal(st.operations.actualDays.length,1);
+assert.equal(st.operations.actualDays[0].history.length,1);
+assert.equal(st.operations.actualDays[0].history[0].rows[0].status,'held');
+corrected[0].status='held';corrected[0].minutes=50;
+saveActualDay(st,{date,week,rows:corrected,allowCorrection:true});
+assert.equal(actualTotals(st)[0].standardUnits,1);
+assert.equal(st.operations.actualDays[0].history.length,2);
+const restored=migrateState(JSON.parse(JSON.stringify(st)));
+assert.equal(restored.operations.actualDays[0].rows[0].subject,'理科');
+assert.equal(actualTotals(restored)[0].minutes,50);
+// Teacher and base timetable edits after confirmation cannot change snapshots.
+st.lessons[0].teacherIds=['another'];
+st.timetable.placements=[];
+assert.equal(actualTotals(st)[0].periods,1);
+assert.throws(()=>actualDayRows(st,{date,week,placements:[placement,placement]}),/複数/);
+console.log('Daily actuals: dated snapshots, 45/50 conversion, duplicates, revisions and persistence passed');
