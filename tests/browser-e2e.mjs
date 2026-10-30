@@ -25,6 +25,13 @@ try{
  await page.goto('http://127.0.0.1:'+server.address().port+'/',{waitUntil:'domcontentloaded'});
  await page.locator('#nav [data-nav="basic"]').waitFor({timeout:15000});
  assert((await page.locator('#content').innerText()).includes('学校情報'));
+ await page.locator('[data-nav="days"]').click();
+ assert.equal(await page.locator('select[data-bind="timetable.cycleWeeks"]').inputValue(),'1','default timetable must be one week');
+ assert((await page.locator('#content').innerText()).includes('基本時間割は原則1週間固定'));
+ await page.locator('[data-nav="timetable"]').click();
+ assert((await page.locator('#content').innerText()).includes('毎週共通'));
+ await page.locator('[data-nav="operations"]').click();
+ assert.equal(await page.locator('#weeklyCycle option').count(),1,'one-week planning should not ask for A/B weeks');
  await page.locator('[data-nav="resources"]').click();
  await page.locator('[data-action="resourceTab"][data-tab="teachers"]').click();
  await page.locator('[data-action="teacherMaster"]').first().click();
