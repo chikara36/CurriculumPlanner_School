@@ -425,7 +425,7 @@ async function temporaryNewConflicts(before,after,allowPlannedGap=false){
  const m=placements=>({...state,timetable:{...state.timetable,placements}});
  const [oldMetrics,newMetrics]=await Promise.all([scheduleMetrics(m(before)),scheduleMetrics(m(after))]);
  const prior=new Set((oldMetrics.hard||[]).map(h=>h.type+'|'+h.text));
- const introduced=(newMetrics.hard||[]).find(h=>!(allowPlannedGap&&h.type==='class-gap')&&!prior.has(h.type+'|'+h.text));
+ const introduced=(newMetrics.hard||[]).find(h=>h.type!=='overplaced'&&!(allowPlannedGap&&h.type==='class-gap')&&!prior.has(h.type+'|'+h.text));
  return introduced?.text||'';
 }
 
@@ -446,6 +446,12 @@ function showActualModal({date,week,placements=[],sourceId=null,sourceName='基�
 function showTemporaryModal(){openModal('臨時時間割を作成',`<div class="form-grid">${field('日付','<input type="date" id="tmpDate">','span4')}${field('名称','<input id="tmpLabel" placeholder="例：文化祭前日・短縮日課">','span5')}${field('サイクル週',`<select id="tmpWeek">${Array.from({length:state.timetable.cycleWeeks},(_,w)=>`<option value="${w}">${w+1}週</option>`).join('')}</select>`,'span3')}</div><div class="notice info" style="margin-top:10px">基本時間割のコピーを臨時時間割として保存します。欠勤対応案を採用した場合も同じ場所に保存されます。</div>`,`<button class="btn" data-action="closeModal">キャンセル</button><button class="btn primary" data-action="saveTemporary">作成</button>`)}
 function showTemporaryDetail(id){const x=state.operations.temporarySchedules.find(y=>y.id===id);if(!x)return;const ps=x.placements||[];const week=Number(x.week||0);const slotOptions=[];for(let d=0;d<5;d++)for(let p=0;p<Math.min(state.periods.length,state.instruction.maxPeriods);p++)slotOptions.push(`<option value="${d}-${p}">${DAYS[d]} ${p+1}限</option>`);const body=`<div class="notice info">${esc(x.date||'日付未設定')}｜${esc(x.label)}｜${week+1}週パターン</div><div style="margin-top:10px">${(x.changes||[]).map(c=>`<div class="constraint"><strong>${esc(c.type||'変更')}</strong><div class="meta">${esc(c.text||'')}</div></div>`).join('')||'<div class="muted">基本時間割の複製です。</div>'}</div><div class="kpi-line"><span>保存駒数</span><strong>${ps.length}</strong></div>
   <div style="height:10px"></div>${card('臨時の入替',`<div class="form-grid">${field('学級',`<select id="tmpSwapClass">${state.resources.classes.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select>`,'span4')}${field('時限A',`<select id="tmpSlotA">${slotOptions.join('')}</select>`,'span4')}${field('時限B',`<select id="tmpSlotB">${slotOptions.join('')}</select>`,'span4')}</div><button class="btn small" data-action="tempSwap" data-id="${id}">2コマを入替</button>`,'合同・同時展開など複合授業は安全のため自動入替対象外です。')}
+  <div style="height:10px"></div>${card('急な教科変更・代替授業',`<div class="form-grid">
+  ${field('対象学級',`<select id="tmpReplaceClass">${state.resources.classes.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select>`,'span3')}
+  ${field('対象時限',`<select id="tmpReplaceSlot">${slotOptions.join('')}</select>`,'span3')}
+  ${field('変更先の教科・授業',`<select id="tmpReplaceLesson">${state.lessons.filter(l=>l.classIds?.length===1).map(l=>`<option value="${l.id}">${esc(classById(state,l.classIds[0])?.name||'')}｜${esc(l.subject)}</option>`).join('')}</select>`,'span4')}
+  ${field('代替教員（任意）',`<select id="tmpReplaceTeacher"><option value="">授業設定どおり</option>${state.resources.teachers.map(t=>`<option value="${t.id}">${esc(t.name)}</option>`).join('')}</select>`,'span2')}
+  </div><div style="margin-top:9px"><button class="btn primary" data-action="tempReplaceLesson" data-id="${id}">この日の授業を差し替え</button></div>`,'指定した日だけの変更です。複数学級・2コマ連続授業の変更は対象外です。')}
   <div style="height:10px"></div>${card('行事・短縮対応',`<div class="form-grid">${field('休止する時限',`<select id="tmpRemoveSlot">${slotOptions.join('')}</select>`,'span6')}</div><div class="inline"><button class="btn small warn" data-action="tempRemoveSlot" data-id="${id}">この時限を休止</button><button class="btn small" data-action="tempRemoveShift" data-id="${id}">休止して後続を前詰め</button></div>`,'学校全体の臨時変更として記録します。')}</div>`;openModal('臨時時間割',body,`<button class="btn" data-action="closeModal">閉じる</button>`)}
 
 
@@ -474,6 +480,25 @@ async function handleSecondaryClick(e){const b=e.target.closest('[data-action]')
     actualDraftRows=null;closeModal();scheduleSave();render();toast(correction?'訂正を履歴付きで保存しました':'授業実績を確定しました','ok');return;
   }
   if(a==='saveTemporary'){const date=$('#tmpDate').value,label=$('#tmpLabel').value.trim()||'臨時時間割',week=Number($('#tmpWeek').value);state.operations.temporarySchedules.push({id:uid('tmp'),date,label,week,day:date?((new Date(date+'T00:00:00').getDay()+6)%7):0,placements:deepClone(state.timetable.placements),changes:[],createdAt:new Date().toISOString(),source:'manual'});closeModal();scheduleSave();render();return}
+  if(a==='tempReplaceLesson'){
+    const x=state.operations.temporarySchedules.find(t=>t.id===b.dataset.id);if(!x)return;
+    if(dateWeekday(x.date)<0)return toast('臨時時間割に実施日を設定してください','warn');
+    const classId=$('#tmpReplaceClass')?.value,lessonId=$('#tmpReplaceLesson')?.value,teacherId=$('#tmpReplaceTeacher')?.value||'',[day,period]=($('#tmpReplaceSlot')?.value||'0-0').split('-').map(Number);
+    if(!classId||!lessonId)return toast('学級と変更先の授業を選択してください','warn');
+    if(day!==dateWeekday(x.date))return toast('実施日と同じ曜日を指定してください','warn');
+    const lesson=lessonById(state,lessonId);
+    if(!lesson||lesson.classIds?.length!==1||lesson.classIds[0]!==classId||lesson.blockSize>1||lesson.syncGroup)return toast('同じ学級の単独授業を選んでください','warn');
+    const before=deepClone(x.placements||[]),candidate=deepClone(before),week=Number(x.week);
+    const existing=candidate.filter(p=>p.week===week&&p.day===day&&p.period===period&&(lessonById(state,p.lessonId)?.classIds||[]).includes(classId));
+    if(existing.length>1)return toast('同時展開の授業は簡易変更できません','warn');
+    if(existing.length){const old=lessonById(state,existing[0].lessonId),p=existing[0];if(old?.classIds?.length!==1||old?.syncGroup||p.blockId||Number(old.blockSize||1)>1)return toast('合同授業・連続授業はまとめて変更してください','warn')}
+    const removed=new Set(existing.map(p=>p.id));const changed=candidate.filter(p=>!removed.has(p.id));
+    changed.push({id:uid('p'),lessonId,week,day,period,locked:false,...(teacherId?{teacherIdsOverride:[teacherId]}:{})});
+    const conflict=await temporaryNewConflicts(before,changed,true);
+    if(conflict)return toast(`変更できません：${conflict}`,'warn');
+    x.placements=changed;x.changes.push({type:'replace',text:`${classById(state,classId)?.name||classId}｜${DAYS[day]}${period+1}限 → ${lesson.subject}${teacherId?'（'+(teacherById(state,teacherId)?.name||'代替')+'）':''}`});
+    scheduleSave();showTemporaryDetail(x.id);toast('臨時の授業変更を保存しました','ok');return;
+  }
   if(a==='tempSwap'){
     const x=state.operations.temporarySchedules.find(y=>y.id===b.dataset.id);if(!x)return;
     const cid=$('#tmpSwapClass').value,[d1,p1]=$('#tmpSlotA').value.split('-').map(Number),[d2,p2]=$('#tmpSlotB').value.split('-').map(Number),w=Number(x.week||0);
