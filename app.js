@@ -6,7 +6,7 @@ import {saveToDrive,loadFromDrive} from './drive.js';
 import {reportByType} from './reports.js';
 import {dateWeekday,actualDayRows,saveActualDay,subjectProgress} from './actuals.js';
 import {mondayFor,weekDates,registeredConditions,validateAbsence,absenceAt,weekHasActuals,weeklyTemporarySchedules,weeklyConditionsMatch} from './weekly.js';
-import {periodAssignmentIssues,periodAllocationSummary,resolveDatedPlacements,actualComponentProgress} from './period-assignments.js';
+import {periodAssignmentIssues,periodAllocationSummary,resolveDatedPlacements,actualComponentProgress,estimatePeriodSchedule} from './period-assignments.js';
 
 const NAV=[
   ['basic','01','基本情報'],['goals','02','教育目標・重点'],['calendar','03','年間カレンダー'],['days','04','授業日数・週時数'],
@@ -180,6 +180,7 @@ function renderLessons(){
 function renderPeriodAssignments(){
  const cls=classById(state,state.ui.periodClassId)||state.resources.classes[0];
  const all=(state.periodAssignments||[]).filter(x=>x.classId===cls?.id).slice().sort((a,b)=>a.startDate.localeCompare(b.startDate));
+ const calendar=calendarStats(state);
  const bases=[...new Set(all.map(x=>x.baseSubject))];
  const distinct=[...new Set(bases.concat('技術・家庭'))].filter(name=>state.hourPlans.find(h=>Number(h.grade)===Number(cls?.grade))?.subjects?.some(s=>s.name===name));
  const rows=distinct.map(name=>{
@@ -190,11 +191,12 @@ function renderPeriodAssignments(){
   <div class="notice info"><strong>基本時間割は毎週同じ枠を使用します。</strong> 例えば技術・家庭を毎週1コマとし、4月〜9月を「技術分野・A先生」、10月〜3月を「家庭分野・B先生」に切り替えられます。年間35コマの内訳を18・17など学校で設定してください。技術・家庭という親教科の年間時数は増えません。</div>
   <div class="inline" style="margin-top:12px;align-items:center"><strong>設定学級</strong><select data-action="periodClassSelector" id="periodClassSelector">${state.resources.classes.map(c=>`<option value="${c.id}" ${c.id===cls?.id?'selected':''}>${esc(c.name)}</option>`).join('')}</select><button class="btn primary" data-action="addPeriodAssignment">＋ 期間別配当を追加</button></div>
   <div style="margin-top:12px">${rows}</div>
-  <div class="table-wrap" style="margin-top:10px"><table class="table"><thead><tr><th>基本教科</th><th>実施期間</th><th>実施内容</th><th>担当</th><th>教室</th><th>年間配当</th><th>実績</th><th>操作</th></tr></thead><tbody>${all.map(x=>{
+  <div class="table-wrap" style="margin-top:10px"><table class="table"><thead><tr><th>基本教科</th><th>実施期間</th><th>実施内容</th><th>担当</th><th>教室</th><th>年間配当</th><th>予定（概算）</th><th>実績</th><th>操作</th></tr></thead><tbody>${all.map(x=>{
     const used=actualComponentProgress(state,x.classId,x.baseSubject).find(a=>a.id===x.id);
-    return `<tr><td>${esc(x.baseSubject)}</td><td style="white-space:nowrap">${esc(x.startDate)}〜<wbr>${esc(x.endDate)}</td><td><strong>${esc(x.label)}</strong></td><td>${esc(teacherById(state,x.teacherId)?.name||'基本担当')}</td><td>${esc(facilityById(state,x.facilityId)?.name||'基本教室')}</td><td class="num">${Number(x.targetHours||0)}</td><td class="num">${(used?.completed||0).toFixed(2)}</td><td><button class="btn small" data-action="editPeriodAssignment" data-id="${x.id}">編集</button> <button class="btn small danger" data-action="removePeriodAssignment" data-id="${x.id}">削除</button></td></tr>`;
-   }).join('')||'<tr><td colspan="8">期間別配当はありません。年間通じて基本の教科・担当で授業を行います。</td></tr>'}</tbody></table></div>
-  <div class="help" style="margin-top:8px">同一学級・基本教科の期間は重複登録できません。分野の配当合計が基本教科の年間時数を超える場合は保存できません。過去に確定した実績は変更されません。</div>
+    const estimate=estimatePeriodSchedule(state,x,calendar.byDate);
+    return `<tr><td>${esc(x.baseSubject)}</td><td style="white-space:nowrap">${esc(x.startDate)}〜<wbr>${esc(x.endDate)}</td><td><strong>${esc(x.label)}</strong></td><td>${esc(teacherById(state,x.teacherId)?.name||'基本担当')}</td><td>${esc(facilityById(state,x.facilityId)?.name||'基本教室')}</td><td class="num">${Number(x.targetHours||0)}</td><td class="num">${estimate?`${estimate.standardUnits.toFixed(1)} <span class="help">(${estimate.periods}コマ)</span>`:'未算出'}</td><td class="num">${(used?.completed||0).toFixed(2)}</td><td><button class="btn small" data-action="editPeriodAssignment" data-id="${x.id}">編集</button> <button class="btn small danger" data-action="removePeriodAssignment" data-id="${x.id}">削除</button></td></tr>`;
+   }).join('')||'<tr><td colspan="9">期間別配当はありません。年間通じて基本の教科・担当で授業を行います。</td></tr>'}</tbody></table></div>
+  <div class="help" style="margin-top:8px">同一学級・基本教科の期間は重複登録できません。分野の配当合計が基本教科の年間時数を超える場合は保存できません。「予定（概算）」は学校カレンダーの授業日と基本時間割から算出したもので、行事による入替などは含みません。実績の数字を優先して管理してください。過去に確定した実績は変更されません。</div>
  `);
 }
 function showPeriodAssignmentModal(id=null){
