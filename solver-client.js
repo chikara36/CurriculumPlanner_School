@@ -1,5 +1,5 @@
 import {mondayFor} from './weekly.js';
-import {resolveWeekPlacements} from './period-assignments.js';
+import {resolveWeekPlacements,weeklyPeriodOverrides} from './period-assignments.js';
 import {calendarStats,gradePatterns} from './calendar.js';
 import {cycleSessionsForLesson} from './model.js';
 
@@ -31,6 +31,7 @@ export async function replanTeacherWeek(state,week,conditions){
  if(conditions?.length&&state.periodAssignments?.length){
   const monday=mondayFor(conditions[0].date);
   model.placements=resolveWeekPlacements(state,monday,week,model.placements);
+  model.periodOverrides=weeklyPeriodOverrides(state,monday,week);
  }
  return call('weeklyReplan',{model,week,conditions});
 }
