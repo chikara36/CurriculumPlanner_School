@@ -1,4 +1,5 @@
 import {calendarStats,monthMatrix,weeklyTargetForGrade,dailyPattern} from './calendar.js';
+import {subjectProgress} from './actuals.js';
 import {classById,teacherById,facilityById,lessonById,DAYS,cycleSessionsForLesson,discretionaryLedger,discretionaryCaps,effectiveSubjectHours,effectiveInstructionHours} from './model.js';
 function esc(s){return String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
 function fmtDate(s){if(!s)return '';const [y,m,d]=s.split('-');return `${Number(y)}年${Number(m)}月${Number(d)}日`}
@@ -39,5 +40,19 @@ export function timetableReport(state,kind='class',id=null){
 export function teacherScheduleReport(state){let html='';for(const t of state.resources.teachers){html+=timetableReportBody(state,'teacher',t.id)}return wrap(state,'教員時間割一覧',html)}
 export function facilityScheduleReport(state){let html='';for(const f of state.resources.facilities.filter(x=>x.kind==='facility')){html+=timetableReportBody(state,'facility',f.id)}return wrap(state,'施設時間割一覧',html)}
 function timetableReportBody(state,kind,id){let html=`<h2>${esc(viewName(state,kind,id))}</h2>`;for(let w=0;w<state.timetable.cycleWeeks;w++){const ps=placementsForView(state,kind,id,w);html+=`<h3>${w+1}週目</h3><table class="report-table"><tr><th>時限</th>${DAYS.map(d=>`<th>${d}</th>`).join('')}</tr>`;for(let p=0;p<state.periods.length;p++){html+=`<tr><th>${esc(state.periods[p].name)}</th>`;for(let d=0;d<5;d++){const items=ps.filter(x=>x.day===d&&x.period===p).map(x=>lessonById(state,x.lessonId)).filter(Boolean);html+=`<td>${items.map(l=>esc(l.subject)).join('<br>')}</td>`}html+='</tr>'}html+='</table>'}return `<div class="page-break">${html}</div>`}
-export function reportByType(state,type,opts={}){if(type==='calendar')return calendarReport(state);if(type==='hours')return hoursReport(state);if(type==='timetable')return timetableReport(state,opts.kind,opts.id);if(type==='teachers')return teacherScheduleReport(state);if(type==='facilities')return facilityScheduleReport(state);return summaryReport(state)}
+
+export function actualsReport(state){
+ const days=[...(state.operations.actualDays||[])].sort((a,b)=>a.date.localeCompare(b.date));
+ let html='<h3>学級別・教科別の時数進捗</h3>';
+ for(const cls of state.resources.classes){
+  const p=subjectProgress(state,cls.grade,cls.id);
+  html+=`<h4>${esc(cls.name)}</h4><table class="report-table"><tr><th>教科</th><th>年間計画</th><th>実施駒</th><th>実施分数</th><th>標準時数換算</th><th>残り</th></tr>
+  ${p.map(x=>`<tr><td>${esc(x.subject)}</td><td>${x.target}</td><td>${x.periods}</td><td>${x.minutes}</td><td>${x.completed.toFixed(2)}</td><td>${x.remaining.toFixed(2)}</td></tr>`).join('')}</table>`;
+ }
+ html+='<h3>日別の実績履歴</h3><table class="report-table"><tr><th>実施日</th><th>学級</th><th>時限</th><th>教科</th><th>実施区分</th><th>分数</th><th>担当</th><th>備考</th></tr>';
+ for(const d of days)for(const x of d.rows||[])html+=`<tr><td>${esc(d.date)}</td><td>${esc(x.className)}</td><td>${x.period+1}</td><td>${esc(x.subject)}</td><td>${x.status==='held'?'実施':'未実施'}</td><td>${x.status==='held'?x.minutes:0}</td><td>${esc((x.teacherNames||[]).join('・'))}</td><td>${esc(x.note||'')}</td></tr>`;
+ html+='</table><p>出張や欠勤による変更は臨時時間割と分けて保存します。実施済みとして確定した授業のみ集計し、訂正前の内容は保存データに履歴を保持します。</p>';
+ return wrap(state,'授業実績・年間時数進捗',html);
+}
+export function reportByType(state,type,opts={}){if(type==='actuals')return actualsReport(state);if(type==='calendar')return calendarReport(state);if(type==='hours')return hoursReport(state);if(type==='timetable')return timetableReport(state,opts.kind,opts.id);if(type==='teachers')return teacherScheduleReport(state);if(type==='facilities')return facilityScheduleReport(state);return summaryReport(state)}
 function wrap(state,title,body){return `<div class="report-sheet"><div class="report-title">${esc(title)}</div><div class="report-meta"><span>${esc(state.school.name)}</span><span>${state.school.fiscalYear}年度</span></div>${body}</div>`}
