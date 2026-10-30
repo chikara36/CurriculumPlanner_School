@@ -254,6 +254,57 @@ function renderWeeklyPanel(){
  ${card('③ 確定した週の時間割',`<div class="table-wrap"><table class="table"><thead><tr><th>対象週</th><th>登録条件</th><th>移動件数</th><th>確定日時</th><th></th></tr></thead><tbody>${finalized.map(p=>`<tr><td>${p.weekStart}〜${weekDates(p.weekStart)[4]}</td><td>${p.absences.length}件</td><td>${p.changes.length}件</td><td>${fmtTime(p.confirmedAt)}</td><td><button class="btn small" data-action="viewWeeklyPlan" data-id="${p.id}">内容を見る</button></td></tr>`).join('')||'<tr><td colspan="5">まだ確定していません。</td></tr>'}</tbody></table></div>`,'確定時の条件・変更内容・週の授業配置を保管します。確認済みの授業実績は変更しません。')}
  `;
 }
+
+async function generateWeeklyPlan(){
+ const start=state.ui.weeklyStart;
+ if(!start)return toast('不在条件を登録して対象週を選択してください','warn');
+ if(!(state.timetable.placements||[]).length)return toast('STEP09で基本時間割を編成してから実施してください','warn');
+ const conditions=registeredConditions(state,start);
+ if(!conditions.length)return toast('この週の不在条件がありません','warn');
+ if(weekHasActuals(state,start))return toast('この週には確定済み授業実績があります。実績を保持するため再編成はできません','warn');
+ const week=Number(conditions[0].week),signature=weeklyFingerprint(start);
+ busy=true;render();
+ try{
+  const result=await replanTeacherWeek(state,week,conditions);
+  if(signature!==weeklyFingerprint(start)){weeklyPreview=null;toast('計算中に条件が変わったため案を破棄しました','warn');return}
+  weeklyPreview={weekStart:start,week,conditions:deepClone(conditions),result,signature,generatedAt:new Date().toISOString()};
+  render();
+  toast(result.ok?'週次の組み替え案を作成しました':`未解決${result.unresolved.length}件。条件の調整が必要です`,result.ok?'ok':'warn');
+ }catch(err){console.error(err);toast(err.message||'週次再編成に失敗しました','err')}
+ finally{busy=false;render()}
+}
+function confirmWeeklyPlan(){
+ const prev=weeklyPreview;if(!prev||!prev.result.ok)return toast('未解決のない組み替え案を作成してください','warn');
+ if(prev.signature!==weeklyFingerprint(prev.weekStart))return toast('条件または基本時間割が変更されました。変更案を再作成してください','warn');
+ if(weekHasActuals(state,prev.weekStart))return toast('確定済みの授業実績があるため、週次時間割を上書きできません','warn');
+ const dates=new Set(weekDates(prev.weekStart));
+ const conflicts=(state.operations.temporarySchedules||[]).filter(t=>dates.has(t.date)&&t.source!=='weekly-replan');
+ if(conflicts.length)return toast('対象週に手動の臨時時間割があります。内容を整理してから週次案を確定してください','warn');
+ const old=(state.operations.weeklyPlans||[]).find(p=>p.weekStart===prev.weekStart);
+ if(!confirm(`${prev.weekStart}からの週の授業配置を${old?'再':'新規'}確定します。出張等の不在${prev.conditions.length}件、授業移動${prev.result.changes.length}件。確定しますか？`))return;
+ const now=new Date().toISOString();
+ const plan={id:old?.id||uid('week'),weekStart:prev.weekStart,week:prev.week,absences:deepClone(prev.conditions),placements:deepClone(prev.result.placements),changes:deepClone(prev.result.changes),confirmedAt:now,history:old?.history||[]};
+ if(old){plan.history.push({confirmedAt:old.confirmedAt,absences:deepClone(old.absences),placements:deepClone(old.placements),changes:deepClone(old.changes)});state.operations.weeklyPlans=state.operations.weeklyPlans.filter(x=>x.id!==old.id)}
+ state.operations.weeklyPlans.push(plan);
+ state.operations.temporarySchedules=(state.operations.temporarySchedules||[]).filter(t=>t.weeklyPlanId!==plan.id);
+ state.operations.temporarySchedules.push(...weeklyTemporarySchedules(plan));
+ weeklyPreview=null;scheduleSave();render();toast('週次時間割と月〜金の日付別予定を確定しました','ok');
+}
+function showWeeklyPlan(id){
+ const p=(state.operations.weeklyPlans||[]).find(x=>x.id===id);if(!p)return;
+ const rows=p.changes.map(c=>`<tr><td>${esc(c.className)}</td><td>${esc(c.subject)}</td><td>${esc(c.teacherNames.join('・'))}</td><td>${DAYS[c.fromDay]}${c.fromPeriod+1}限</td><td>${DAYS[c.toDay]}${c.toPeriod+1}限</td></tr>`).join('');
+ openModal('確定済みの週次時間割',`<div class="notice info">${p.weekStart}〜${weekDates(p.weekStart)[4]}｜サイクル${p.week+1}週｜${p.absences.length}件の不在条件｜${p.changes.length}件の授業移動</div><div class="table-wrap" style="margin-top:12px"><table class="table"><thead><tr><th>学級</th><th>教科</th><th>担当教員</th><th>変更前</th><th>変更後</th></tr></thead><tbody>${rows||'<tr><td colspan="5">変更なし</td></tr>'}</tbody></table></div><div class="help">この週の実績入力はSTEP10の日別時間割から行ってください。確定した授業実績は再計算では書き換えません。</div>`,`<button class="btn" data-action="closeModal">閉じる</button>`);
+}
+function showWeeklyDayDetail(id){
+ const x=state.operations.temporarySchedules.find(t=>t.id===id);if(!x)return;
+ const plan=(state.operations.weeklyPlans||[]).find(p=>p.id===x.weeklyPlanId);
+ const day=dateWeekday(x.date);
+ const rows=(x.placements||[]).filter(p=>p.week===x.week&&p.day===day).map(p=>{
+  const l=lessonById(state,p.lessonId);
+  return l?{p,l,teacherNames:(p.teacherIdsOverride?.length?p.teacherIdsOverride:l.teacherIds||[]).map(id=>teacherById(state,id)?.name||id)}:null;
+ }).filter(Boolean);
+ openModal('確定済みの日別時間割',`<div class="notice info">${x.date}｜${esc(x.label)}。この日は週次一括編成で確定したため、ここでは個別編集しません。再編成は週単位で行います。</div><div class="table-wrap" style="margin-top:12px"><table class="table"><thead><tr><th>時限</th><th>学級</th><th>教科</th><th>担当</th></tr></thead><tbody>${rows.sort((a,b)=>a.p.period-b.p.period).map(({p,l,teacherNames})=>`<tr><td>${p.period+1}限</td><td>${(l.classIds||[]).map(c=>esc(classById(state,c)?.name||c)).join('・')}</td><td>${esc(l.subject)}</td><td>${esc(teacherNames.join('・'))}</td></tr>`).join('')}</tbody></table></div><div class="help">週の確定日：${fmtTime(plan?.confirmedAt)}。実績は当日実施後に「実績入力」から確定してください。</div>`,`<button class="btn" data-action="closeModal">閉じる</button>`);
+}
 function renderOperations(){
  return pageHead('10 出張・欠勤と週次時間割','複数教員の不在条件を登録し、週の時間割をまとめて組み替えます。確定後、日別の授業実績に連動します。')+
  renderWeeklyPanel()+
@@ -381,7 +432,21 @@ async function handleClick(e){
     if(a==='generateAbsence'){await generateAbsence();return}
     if(a==='applyAbsenceProposal'){applyAbsenceProposal(Number(b.dataset.index));return}
     if(a==='createTemporary'){showTemporaryModal();return}
-    if(a==='viewTemporary'){showTemporaryDetail(b.dataset.id);return}
+    if(a==='viewTemporary'){const x=state.operations.temporarySchedules.find(t=>t.id===b.dataset.id);if(x?.source==='weekly-replan')showWeeklyDayDetail(b.dataset.id);else showTemporaryDetail(b.dataset.id);return}
+    if(a==='addWeeklyAbsence'){
+      const item={id:uid('absence'),teacherId:$('#weeklyTeacher')?.value,date:$('#weeklyDate')?.value,segment:$('#weeklySegment')?.value,week:Number($('#weeklyCycle')?.value)};
+      validateAbsence(state,item);
+      state.operations.absences.push(item);state.ui.weeklyStart=mondayFor(item.date);weeklyPreview=null;scheduleSave();render();toast('不在条件を登録しました','ok');return;
+    }
+    if(a==='removeWeeklyAbsence'){
+      const item=(state.operations.absences||[]).find(x=>x.id===b.dataset.id);if(!item)return;
+      if((state.operations.weeklyPlans||[]).some(p=>p.weekStart===mondayFor(item.date))&&!confirm('この週には確定済みの変更案があります。条件を変更したら週全体を再編成してください。削除しますか？'))return;
+      state.operations.absences=state.operations.absences.filter(x=>x.id!==item.id);
+      weeklyPreview=null;scheduleSave();render();return;
+    }
+    if(a==='generateWeeklyPlan'){await generateWeeklyPlan();return}
+    if(a==='confirmWeeklyPlan'){confirmWeeklyPlan();return}
+    if(a==='viewWeeklyPlan'){showWeeklyPlan(b.dataset.id);return}
     if(a==='recordActual'){const x=state.operations.temporarySchedules.find(y=>y.id===b.dataset.id);if(x)showActualModal({date:x.date,week:x.week,placements:x.placements,sourceId:x.id,sourceName:x.label});return}
     if(a==='recordBaseActual'){showActualModal({date:$('#actualBaseDate')?.value,week:Number($('#actualBaseWeek')?.value||0),placements:state.timetable.placements});return}
     if(a==='reviseActual'){const x=(state.operations.actualDays||[]).find(d=>d.date===b.dataset.date);if(x)showActualModal({date:x.date,week:x.week,sourceId:x.sourceId,sourceName:x.sourceName,correction:true});return}
@@ -425,6 +490,7 @@ function handleChange(e){
   const a=e.target.dataset.action;
   if(a==='scheduleViewId'){state.timetable.view.id=e.target.value;scheduleSave();render()}
   if(a==='reportType'){state.ui.reportType=e.target.value;scheduleSave();renderReportPreview()}
+  if(a==='weeklyTarget'){state.ui.weeklyStart=e.target.value;weeklyPreview=null;scheduleSave();render();return}
   if(a==='actualClassSelector'){state.ui.actualClassId=e.target.value;scheduleSave();render()}
   if(a==='allocKind'){const g=Number(e.target.dataset.grade),el=$('#allocNewSubject_'+g);if(el)el.placeholder=e.target.value==='new_subject'?'新設教科の名称を入力':'新設教科を選択するときだけ入力';}
   if(a==='assignmentTeacher'){const l=lessonById(state,e.target.dataset.lessonId);if(l){const tid=e.target.value;l.teacherIds=tid?[tid]:[];metricsCache=null;absenceCache=null;state.timetable.lastResult=null;scheduleSave();refreshMetrics();render();toast('担当教員を更新しました。既存の時間割は保持し、制約を再確認します','ok')}}
