@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import {defaultState,migrateState} from '../model.js';
-import {mondayFor,weekDates,validateAbsence,registeredConditions,weeklyTemporarySchedules} from '../weekly.js';
+import {mondayFor,weekDates,validateAbsence,registeredConditions,weeklyTemporarySchedules,weeklyConditionsMatch,absenceAt} from '../weekly.js';
 const st=defaultState();st.timetable.cycleWeeks=1;st.instruction.cycleWeeks=1;
 const [teacherA,teacherB]=st.resources.teachers;
 const classes=st.resources.classes;
@@ -54,4 +54,9 @@ const restored=migrateState({...st,operations:{...st.operations,weeklyPlans:[con
 assert.equal(restored.operations.weeklyPlans[0].changes.length,2);
 const blocked=plan({...m,placements:[{...a,locked:true},b]},[condA]);
 assert(!blocked.ok&&blocked.unresolved.length>0,'locked lesson should remain unresolved');
+assert(weeklyConditionsMatch(restored,confirmed)===true);
+restored.operations.absences.push({id:'new',teacherId:teacherA.id,date:'2026-11-04',segment:'PM',week:0});
+assert(weeklyConditionsMatch(restored,confirmed)===false,'post-confirmation condition changes must mark plan stale');
+assert(!absenceAt({segment:'PM'},2)&&absenceAt({segment:'PM'},3));
+assert(absenceAt({segment:'AM'},2)&&!absenceAt({segment:'AM'},3));
 console.log('Weekly replan regression passed: concurrent absences, week snapshots, persistence and locked conflict');
