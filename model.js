@@ -1,3 +1,4 @@
+import {periodAssignmentIssues,periodAllocationSummary} from './period-assignments.js';
 export const APP_VERSION='1.8.0';
 export const SCHEMA_VERSION=16;
 export const DAYS=['月','火','水','木','金'];
@@ -275,6 +276,15 @@ export function validateState(st,calendarStats){
    }
   }
   for(const hp of st.hourPlans){const ledger=discretionaryLedger(st,hp.grade);if(ledger.remaining<0)push('ERROR','ADJUSTMENT-OVERSPENT',`${hp.grade}年の裁量時数が不足`,`${-ledger.remaining}時間超過しています。`);else if(ledger.remaining>0&&ledger.reductions>0)push('WARNING','ADJUSTMENT-UNALLOCATED',`${hp.grade}年に未配分の裁量時数`,`${ledger.remaining}時間が未配分です。`)}
+  for(const p of st.periodAssignments||[]){
+    const errors=periodAssignmentIssues(st,p,p.id);
+    for(const msg of errors)push('ERROR','PERIOD-ASSIGNMENT-INVALID',`${classById(st,p.classId)?.name||p.classId} ${p.label||p.baseSubject}の期間別配当`,msg);
+  }
+  const groups=new Set((st.periodAssignments||[]).map(p=>p.classId+'|'+p.baseSubject));
+  for(const key of groups){
+    const [classId,...parts]=key.split('|'),base=parts.join('|'),summary=periodAllocationSummary(st,classId,base);
+    if(summary.entries.length&&Math.abs(summary.remaining)>0.001)push('WARNING','PERIOD-ALLOCATION-GAP',`${classById(st,classId)?.name||classId}の${base}の分野別配当`,`教科年間${summary.target}に対して分野配当合計${summary.allocated}、差${summary.remaining}。期間内の日付範囲と併せて確認してください。`);
+  }
   const std=standardUnitMinutesForSchool(st.school.type),actual=Number(st.school.lessonMinutes||std);if(actual!==std)push('INFO','UNIT-CONVERSION','授業時間を換算して時間割を編成',`${st.school.type==='elementary'?'小学校':'中学校'}の標準1単位時間${std}分に対し、実施1コマ${actual}分で換算します。`);
   const seen=new Set();for(const p of st.timetable.placements||[]){if(seen.has(p.id))push('ERROR','TT-DUPID','時間割データID重複',p.id);seen.add(p.id)}return issues;
 }
