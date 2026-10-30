@@ -284,7 +284,19 @@ function weeklyReplan(m,week,conditions){
   const moved=[];
   for(const {unit,dest} of rotation){
    const off=dest.period-unit.period;
-   moved.push(...unit.items.map(p=>({...p,day:dest.day,period:p.period+off})));
+   for(const p of unit.items){
+    const item={...p,day:dest.day,period:p.period+off};
+    const forDay=(adjusted.periodOverrides||[]).find(x=>x.lessonId===p.lessonId&&Number(x.week)===Number(targetWeek)&&x.day===dest.day);
+    if(forDay){
+     item.periodAssignmentId=forDay.periodAssignmentId;
+     item.subjectOverride=forDay.subjectOverride;
+     item.teacherIdsOverride=forDay.teacherIdsOverride;
+     item.facilityIdOverride=forDay.facilityIdOverride;
+    }else if(p.periodAssignmentId){
+     delete item.periodAssignmentId;delete item.subjectOverride;delete item.teacherIdsOverride;delete item.facilityIdOverride;
+    }
+    moved.push(item);
+   }
   }
   if(moved.some(affected))return null;
   const working=stable.slice();
