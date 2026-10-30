@@ -61,3 +61,17 @@ export function actualComponentProgress(state,classId,subject){
   return {...t,periods:matched.length,minutes,completed,remaining:Math.max(0,Number(t.targetHours||0)-completed)};
  });
 }
+
+export function weeklyPeriodOverrides(state,weekStart,week){
+ const d=new Date(weekStart+'T12:00:00'),results=[];
+ for(let day=0;day<5;day++){
+  const x=new Date(d);x.setDate(d.getDate()+day);
+  const date=[x.getFullYear(),String(x.getMonth()+1).padStart(2,'0'),String(x.getDate()).padStart(2,'0')].join('-');
+  for(const l of state.lessons||[]){
+   if(l.classIds?.length!==1)continue;
+   const match=(state.periodAssignments||[]).find(t=>t.classId===l.classIds[0]&&t.baseSubject===l.subject&&dateInRange(date,t.startDate,t.endDate));
+   if(match)results.push({lessonId:l.id,day,week:Number(week),periodAssignmentId:match.id,subjectOverride:match.label,teacherIdsOverride:match.teacherId?[match.teacherId]:[...(l.teacherIds||[])],facilityIdOverride:match.facilityId||l.facilityId});
+  }
+ }
+ return results;
+}
